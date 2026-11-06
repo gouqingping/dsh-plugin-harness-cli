@@ -19,80 +19,92 @@
 
 跑完 `node --test plugin/tests/` 即完成本地自查。
 
-## 二、需要在 GitHub / NPM 侧完成的远端项
+## 二、远端状态
 
-> 当前 `origin` 是 Gitee（`gitee.com/qingping/dsh-plugin-harness-cli`），而 dsh-plugin.org 只扫描 GitHub。
-> 需要把仓库**镜像/推送到 GitHub**（例如 `github.com/qingping/dsh-plugin-harness-cli`），
-> 再在 GitHub 仓库的 Settings → Topics 添加 `dsh-plugin`。
+| 项 | 状态 | 说明 |
+|---|---|---|
+| GitHub 公开仓库 | ✅ | <https://github.com/gouqingping/dsh-plugin-harness-cli>（`origin`；master 与远端一致） |
+| GitHub topic `dsh-plugin` | ✅ | 另加 `deepseek-harness` / `harness-engineering` / `agents-md` |
+| 根 `package.json` | ✅ | 包名 / 版本 / license / `repository` 指向本仓库 / `dsh.bundle.patch` |
+| 安装验证 | ✅ | DSH 0.2.2-rc.1：`dsh plugin --profile markettest add <仓库路径>` 成功后 profile 的 `dsh.profile.bundles` 自动追加本包，`dsh --profile markettest --dump-config` 出现 `- id: harness-cli` 行 |
+| 收录 Issue | ✅ | <https://github.com/dshplugin/dsh-plugin-hub/issues/661> |
+| NPM 发布 | ⬜ | 未发布。发布后站点会把条目升级成 npm 一键安装，并进入 DSH「插件中心」 |
 
-- [ ] 仓库已推送到 GitHub 并设为 public
-- [ ] 已在 GitHub 仓库 Topics 添加 **`dsh-plugin`**
-- [ ] （可选）已发布 NPM 包 `dsh-plugin-harness-cli`：只有发到 npm 才会出现在 DSH「插件中心」；
-      不发布也能被收录，安装命令用源码方式
-- [ ] 提交 Issue（或用自动扫描等下一轮刷新）
+> NPM 侧未登录：`~/.npmrc` 里 `registry.npmjs.org` 的 token 已失效（`npm whoami` → 401）。
+> 本机先 `npm login` 再 `npm publish`（包约 12.8 MB / 解包 42 MB，主要是 `plugin/vendor`）。
+> 包名 `dsh-plugin-harness-cli` 在 npm 上仍可用；`repository` 已指向本仓库，
+> 发布后 dsh-plugin.org 会把 NPM 包绑到已有条目上，无需重复提交。
 
 ## 三、提交 Issue 模板（可直接复制）
+
+> 真正的模板源是 hub 的 Issue Form：<https://github.com/dshplugin/dsh-plugin-hub/blob/main/.github/ISSUE_TEMPLATE/plugin_submission.yml>
+> （字段名以它为准，下面按同样的英文小节填）。
 
 **标题**
 
 ```
-[插件提交] qingping/dsh-plugin-harness-cli — 把项目协作规范变成可生成、可校验的文件，模型直接调用
+[插件提交] gouqingping/dsh-plugin-harness-cli — 把项目协作规范变成可生成、可校验的文件，模型直接调用
 ```
 
 **正文**
 
 ```md
-### 仓库地址
+### Repository
+
 https://github.com/gouqingping/dsh-plugin-harness-cli
 
-### 一句话价值
-安装后 DSH 里多出 11 个 harness_cli_* 工具与 10 条 /harness-cli-* 命令：一条命令生成项目骨架、补全 docs/specs、生成 antd UI 设计稿、推进任务进度并跑门禁，让模型按同一套 Harness 规范干活。
+### One-line value
 
-### 能力分类
-开发与运维
+Installing it gives DSH 11 `harness_cli_*` tools and 10 `/harness-cli-*` commands that generate and check a repo's Harness setup (AGENTS.md, env/scope/state/gate files, spec docs, task progress, antd-style UI specs, business wiki), so the model follows one shared spec instead of improvising.
 
-### 安装命令
-dsh plugin --profile web add dsh-plugin-harness-cli
+### Category
 
-（仅源码安装：dsh plugin --profile web add github:qingping/dsh-plugin-harness-cli）
+Development & Operations (dev)
 
-### 兼容与运行要求
-DSH 0.1.5 系列（host 协议 3），profile 支持 web / desktop；Node.js >= 18；零运行时依赖、离线可用；
-style 子命令需要本机 python3；plans --serve 仅监听 127.0.0.1（可选）。
+### Install command
 
-### 许可证
+dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
+
+### npm package
+
+none (not published yet; the name `dsh-plugin-harness-cli` is reserved for an upcoming publish, and `repository` in package.json already points at this repo so the entry can bind to the npm package once it exists)
+
+### License
+
 CC0-1.0
 
-### 截图 / 演示
-README「真实输出（演示）」一节有 init / plan / check 的真实命令行输出。
+### Notes
 
-### 补充说明
-- 只读写目标仓库内文件，不联网、不收集数据。
-- 安装后由 dsh.bundle.patch 自动合入 profile；卸载 dsh plugin remove 即可移除整包。
-- 不是官方插件，与 DeepSeek AI 无隶属关系。
+- `dsh-plugin` topic: ✅
+- `dsh.bundle` in package.json: ✅ (`cordis.patch.yml` at repo root; `main` exports `apply(ctx)` and `inject: ['tools']`)
+- `repository` in package.json: `git+https://github.com/gouqingping/dsh-plugin-harness-cli.git` ✅
+- `engines.node`: `>=18`, zero runtime dependencies, works offline; only the `style` subcommand needs a local `python3` (3.8+)
+- Install verified on DSH 0.2.2-rc.1 (macOS arm64): after `dsh plugin --profile markettest add <repo>`, the profile's `dsh.profile.bundles` gained the package and `dsh --profile markettest --dump-config` contains `- id: harness-cli`
+- Not an official plugin; no affiliation with DeepSeek AI. Reads/writes only the target repo; no network calls, no telemetry; `plans --serve` binds `127.0.0.1` only.
 
-### 提交前自查
-- [x] 仓库已公开
-- [x] 已添加 GitHub topic：dsh-plugin
-- [x] README 包含安装命令
-- [x] 插件导出 apply(ctx) 模块
-- [x] 仓库根目录包含 package.json
+### Self-check
+
+- [x] The repository has the dsh-plugin topic.
+- [x] The install command succeeds locally and the DSH version requirement is met.
+- [x] repository in package.json matches this owner/repo.
 ```
 
-## 四、发布 NPM（可选，想让插件进「插件中心」才需要）
+## 四、发布 NPM（想让插件进「插件中心」才需要）
 
 ```sh
-npm publish            # 包名：dsh-plugin-harness-cli
-# 已登录 npm；scope 包需 npm publish --access public
+npm login              # 当前 ~/.npmrc 里的 npmjs token 已失效，必须重新登录
+npm publish            # 包名：dsh-plugin-harness-cli；scope 包需 npm publish --access public
 ```
+
+发布前想先看内容：`npm pack --dry-run`（本包 2542 个文件、约 12.8 MB tar / 42 MB 解包）。
 
 注意：`files` 里带 `plugin/vendor`（约 48 MB，含离线 yapf/isort/commitlint），发布包会比较大，
 但换来「装完即可离线跑 `style`」。不想带可以删掉 `files` 里的 `plugin/vendor`，`style` 会退化为不可用。
 
 ## 五、徽章
 
-被收录后把 `your-owner` 换成详情页里的 owner：
+README 顶部已放徽章，owner 已填 `gouqingping`；**被收录后**链接才会 200：
 
 ```md
-[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/your-owner/dsh-plugin-harness-cli)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/gouqingping/dsh-plugin-harness-cli)
 ```
