@@ -1,0 +1,801 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * prototype-check.js —— 任务进度页门禁（由 dsh-plugin-harness-cli 生成，零依赖）
+ *
+ * 校验「机械可判定」的部分，人话约定在 prototype/README.md：
+ *   P1 任务目录数不超过上限（默认 10）
+ *   P2 任务目录名合法（字母 / 数字 / 中文 / 中划线 / 下划线；推荐 kebab-case，中文名也允许）
+ *   P3 每个任务目录都有进度页
+ *   P4 任务规划：≥2 步、编号从 1 连续、每步有真实标题、百分比 0..100 且文本与 data-pct 一致
+ *   P5 手填总进度必须等于按步骤等权汇总值（推荐留 “—”，由内联脚本回写）
+ *   P6 不允许「总进度 100% 但还写着待跑 / 待验收」
+ *   P7 docs/current.md 里能找到该任务名（警告级）
+ *   P8 测试用例：至少一条，data-case 唯一，data-step 必须指向存在的步骤
+ *   P9 进度记录：最后一条的 data-total 必须等于当前总进度，时间可解析且递增
+ *   P10 任务状态：进行中 / 待验收 / 完成；完成与待验收要求全部步骤 100%
+ *   P11 汇总页 prototype/progress.html 必须与各任务页一致（过期就报错，提示 --sync）
+ *   P13 DDD 领域模型：限界上下文 + 统一语言 ≥3 条 + 聚合 ≥1 + 不变量 ≥1，不许留待填
+ *   P14 SDD 契约：≥2 条、编号 S-01 形式且唯一、编号/契约/输入/输出/错误语义/验收标准六格都要填
+ *   P15 TDD：每条用例挂在存在的契约上、每条契约至少一条用例、红/绿状态合法、完成时全部为绿
+ *   P16 任务规划的每一步都要 data-spec 指向存在的契约
+ *   P17 每个任务在 docs/specs/<任务>/ 下都有 proposal / spec / design / tasks 四份文档且不留待填
+ *   P18 文档与页面一致：tasks.md 的步骤数与标题、spec.md 的契约编号集合都要对得上
+ *   P19 design.md 必须写清 DDD 四段：限界上下文 / 统一语言 / 聚合与实体 / 不变量
+ *   P20 UI 设计稿：prototype/<任务>/ui/index.html 必须是 antd v5 风格（含设计令牌与组件），
+ *       且同目录 README.md 写清组件清单 / 状态 / 契约对应；没有 UI 稿只警告
+ *   P21 方案确认：每个任务必须有 plan.html，且写了目标 / 方案 / 页面设计 / 流程交互 / 风险 / 验收；
+ *       有进度（步骤 > 0）或状态不是「进行中」时，方案必须「已确认」
+ *   P22 文档定稿：已开工的任务，docs/specs 的指纹必须与方案确认时一致，且 review.md 必须是「已通过」
+ *       （人改文档后必须重新复盘并重新确认，不允许边改边跑）
+ *   P23 UI 同步：有 ui/index.html 时，design.md 里必须有 UI 摘要块，且指纹与当前设计稿一致
+ *   P24 业务同步：有 docs/wiki 时，proposal.md 里必须有业务背景块，且指纹与当前 wiki 一致
+ *
+ * 开关：
+ *   （无）        只读检查
+ *   --sync       用各任务页重写汇总页（prototype/progress.html）的两块内容区
+ *   --prune      清理超过上限的旧任务目录（配合 --dry-run 预览）
+ *   --json       机器可读输出（check 走这个）
+ *
+ * 退出码：0 通过 / 1 有违规 / 2 脚本自身无法运行
+ */
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const DOCS_CURRENT = 'docs/current.md';
+
+function argOf(name, fallback) {
+  const i = process.argv.indexOf(`--${name}`);
+  if (i === -1) return fallback;
+  const value = process.argv[i + 1];
+  return value === undefined || value.startsWith('--') ? true : value;
+}
+
+const AS_JSON = process.argv.includes('--json');
+const PRUNE = process.argv.includes('--prune');
+const SYNC = process.argv.includes('--sync');
+const DRY_RUN = process.argv.includes('--dry-run');
+const ROOT = path.resolve(argOf('root', '.') || '.');
+const CONF = (() => {
+  for (const name of ['harness-cli.json', 'harness-pro.json', 'common-agent.json']) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(ROOT, name), 'utf8'));
+    } catch (err) {
+      // 换下一个候选文件名
+    }
+  }
+  return {};
+})();
+const PRESET = (CONF.presets || {}).prototype || {};
+const DIR = String(argOf('dir', PRESET.dir || 'prototype'));
+const SPECS = String(((CONF.paths || {}).specs) || 'docs/specs');
+const WIKI = String(((CONF.paths || {}).wiki) || 'docs/wiki');
+const KEEP = Number(argOf('keep', PRESET.keep || 10)) || 10;
+const PAGE = String(PRESET.progressPage || 'progress.html');
+const INDEX = String(PRESET.indexPage || 'progress.html');
+const STATUSES = ['进行中', '待验收', '完成'];
+const SKIP = new Set(['_template', '_templates', 'assets', '.git']);
+
+const results = [];
+const add = (id, level, message) => results.push({id, level, message});
+
+function safeReaddir(dir) {
+  try {
+    return fs.readdirSync(dir, {withFileTypes: true});
+  } catch (err) {
+    return null;
+  }
+}
+
+function taskDirs(base) {
+  const entries = safeReaddir(base);
+  if (entries === null) return null;
+  return entries
+    .filter((e) => e.isDirectory() && !SKIP.has(e.name))
+    .map((e) => e.name)
+    .sort();
+}
+
+function readFile(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    return null;
+  }
+}
+
+function attr(html, name) {
+  const m = new RegExp(`${name}="([^"]*)"`).exec(html);
+  return m ? m[1] : null;
+}
+
+/** 取某个 class 的 <li> 块（step / case 这一层内部不嵌套 li）。 */
+function liBlocks(html, className) {
+  const re = new RegExp(`<li[^>]*class="[^"]*\\b${className}\\b[^"]*"[^>]*>([\\s\\S]*?)</li>`, 'g');
+  const out = [];
+  let m;
+  while ((m = re.exec(html)) !== null) out.push({open: m[0].slice(0, m[0].indexOf('>') + 1), body: m[1]});
+  return out;
+}
+
+/** 待填 / 占位文本不算填了。 */
+function filled(text) {
+  const value = String(text === null || text === undefined ? '' : text).trim();
+  return value.length > 0 && value !== '—' && value !== '-' && !/待填|步骤标题/.test(value);
+}
+
+function textOf(html) {
+  return html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 解析一页进度页；解析不到的结构留 null，由各条判定给出具体原因。 */
+function parsePage(html) {
+  const values = [...html.matchAll(/class="[^"]*\bstep-pct\b[^"]*"[^>]*>/g)]
+    .map((m) => {
+      const pct = /data-pct="([^"]*)"/.exec(m[0]);
+      return pct ? Number(pct[1]) : NaN;
+    })
+    .filter((n) => Number.isFinite(n));
+  const total = values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : 0;
+
+  const steps = liBlocks(html, 'step').map((block, index) => {
+    const no = attr(block.open, 'data-step');
+    const pctTag = /class="[^"]*\bstep-pct\b[^"]*"[^>]*>([^<]*)</.exec(block.body);
+    const title = /<h3[^>]*>([\s\S]*?)<\/h3>/.exec(block.body);
+    // 标题里的 <span class="step-no">1</span>. 前缀不算标题内容
+    const titleText = title
+      ? textOf(title[1].replace(/<span[^>]*class="[^"]*step-no[^"]*"[^>]*>[\s\S]*?<\/span>/, ''))
+      : '';
+    return {
+      index,
+      no: no === null ? null : Number(no),
+      spec: attr(block.open, 'data-spec'),
+      title: titleText.replace(/^[.．、\s]+/, ''),
+      pct: pctTag ? Number(attr(pctTag[0], 'data-pct')) : NaN,
+      pctText: pctTag ? pctTag[1].trim() : '',
+    };
+  });
+
+  const cases = liBlocks(html, 'case').map((block) => ({
+    id: attr(block.open, 'data-case'),
+    spec: attr(block.open, 'data-spec'),
+    step: attr(block.open, 'data-step'),
+    tdd: attr(block.open, 'data-tdd'),
+    text: textOf(block.body),
+  }));
+
+  // DDD：限界上下文 + 统一语言 + 聚合 + 不变量
+  const contextMatch = /data-context[^>]*>([\s\S]*?)<\//.exec(html);
+  const termsBlock = /data-language[^>]*>([\s\S]*?)<\/dl>/.exec(html);
+  const terms = termsBlock
+    ? [...termsBlock[1].matchAll(/<dt[^>]*>([\s\S]*?)<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/g)].map((m) => ({
+        term: textOf(m[1]),
+        definition: textOf(m[2]),
+      }))
+    : [];
+  const listTexts = (marker) => {
+    const block = new RegExp(`data-${marker}[^>]*>([\\s\\S]*?)</ul>`).exec(html);
+    if (!block) return [];
+    return [...block[1].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => textOf(m[1]));
+  };
+
+  // SDD：契约表
+  const specs = [...html.matchAll(/<tr[^>]*data-spec="([^"]*)"[^>]*>([\s\S]*?)<\/tr>/g)].map((m) => ({
+    id: m[1],
+    cells: [...m[2].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => textOf(c[1])),
+  }));
+
+  const log = [...html.matchAll(/<li[^>]*data-at="([^"]*)"[^>]*data-total="([^"]*)"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => ({
+    at: m[1],
+    total: Number(m[2]),
+    text: textOf(m[3]),
+  }));
+
+  const updatedMatch = /<time[^>]*data-updated[^>]*datetime="([^"]*)"/.exec(html) || /data-updated[^>]*datetime="([^"]*)"/.exec(html);
+  const declaredMatch = /data-total-pct[^>]*>([^<]*)</.exec(html);
+
+  return {
+    status: attr(html, 'data-task-status'),
+    updated: updatedMatch ? updatedMatch[1] : null,
+    steps,
+    cases,
+    specs,
+    domain: {
+      context: contextMatch ? textOf(contextMatch[1]) : null,
+      terms,
+      aggregates: listTexts('aggregates'),
+      invariants: listTexts('invariants'),
+    },
+    log,
+    total,
+    declaredTotal: declaredMatch ? declaredMatch[1].trim() : null,
+  };
+}
+
+const SPEC_FILES = ['proposal.md', 'spec.md', 'design.md', 'tasks.md'];
+
+/** docs/specs/<任务>/ 是否存在、是否与页面一致（P17 / P18 / P19）。 */
+function checkDocs(name, page, label) {
+  const base = path.join(ROOT, SPECS, name);
+  const docs = {};
+  const missing = [];
+  for (const file of SPEC_FILES) {
+    const text = readFile(path.join(base, file));
+    if (text === null) {
+      missing.push(file);
+      continue;
+    }
+    docs[file] = text;
+    if (text.trim() === '' || /待填/.test(text)) {
+      add('P17', 'error', `${SPECS}/${name}/${file} 还没填完（空文件或留着「待填」）`);
+    }
+  }
+  if (missing.length > 0) {
+    add(
+      'P17',
+      'error',
+      `${SPECS}/${name}/ 缺少 ${missing.join(' / ')}：跑 dsh-plugin-harness-cli page ${name} 补齐（已存在的文件不覆盖）`
+    );
+    return;
+  }
+
+  const design = docs['design.md'] || '';
+  const dddSections = ['限界上下文', '统一语言', '聚合', '不变量'];
+  const missingSection = dddSections.filter((title) => !design.includes(title));
+  if (missingSection.length > 0) {
+    add('P19', 'error', `${SPECS}/${name}/design.md 缺少 DDD 小节：${missingSection.join(' / ')}`);
+  }
+
+  // tasks.md 的编号步骤 vs 页面步骤
+  const taskItems = [...(docs['tasks.md'] || '').matchAll(/^\s*(\d+)\.\s+(.+)$/gm)].map((m) => ({
+    no: Number(m[1]),
+    text: m[2].trim(),
+  }));
+  if (taskItems.length !== page.steps.length) {
+    add('P18', 'error', `${SPECS}/${name}/tasks.md 有 ${taskItems.length} 步，页面有 ${page.steps.length} 步：两处必须一致`);
+  }
+  taskItems.forEach((item, index) => {
+    if (item.no !== index + 1) {
+      add('P18', 'error', `${SPECS}/${name}/tasks.md 第 ${index + 1} 条的编号是 ${item.no}：必须从 1 连续`);
+    }
+  });
+  for (const step of page.steps) {
+    if (filled(step.title) && !(docs['tasks.md'] || '').includes(step.title)) {
+      add('P18', 'error', `${SPECS}/${name}/tasks.md 里找不到页面第 ${step.index + 1} 步的标题「${step.title}」`);
+    }
+  }
+
+  // spec.md 的契约编号 vs 页面契约表
+  const docSpecs = new Set([...(docs['spec.md'] || '').matchAll(/^##\s+(S-\d{2,})\b/gm)].map((m) => m[1]));
+  const pageSpecs = new Set((page.specs || []).map((spec) => spec.id));
+  const onlyPage = [...pageSpecs].filter((id) => !docSpecs.has(id));
+  const onlyDoc = [...docSpecs].filter((id) => !pageSpecs.has(id));
+  if (onlyPage.length > 0) {
+    add('P18', 'error', `${SPECS}/${name}/spec.md 缺少契约：${onlyPage.join(', ')}（页面里有，文档里没有）`);
+  }
+  if (onlyDoc.length > 0) {
+    add('P18', 'error', `${SPECS}/${name}/spec.md 多了契约：${onlyDoc.join(', ')}（文档里有，页面里没有）`);
+  }
+}
+
+function checkDomain(page, label) {
+  const domain = page.domain || {};
+  if (!filled(domain.context)) {
+    add('P13', 'error', `${label} 缺少限界上下文（data-context）：先划清这个任务属于哪个边界`);
+  }
+  const terms = (domain.terms || []).filter((t) => filled(t.definition));
+  if (terms.length < 3) {
+    add('P13', 'error', `${label} 统一语言只有 ${terms.length} 条：至少 3 条（术语 + 一句话定义）`);
+  }
+  if ((domain.aggregates || []).filter(filled).length === 0) {
+    add('P13', 'error', `${label} 没有聚合 / 实体：写清改动落在哪个聚合根上，它守住什么`);
+  }
+  if ((domain.invariants || []).filter(filled).length === 0) {
+    add('P13', 'error', `${label} 没有不变量：任何时刻都必须成立的那句话没写`);
+  }
+}
+
+function checkSpecs(page, label) {
+  const specs = page.specs || [];
+  if (specs.length < 2) {
+    add('P14', 'error', `${label} 契约只有 ${specs.length} 条：至少 2 条（SDD 要把需求拆成可执行规格）`);
+  }
+  const seen = new Set();
+  for (const spec of specs) {
+    if (!/^S-\d{2,}$/.test(spec.id)) add('P14', 'error', `${label} 契约编号 ${spec.id} 不合法（形如 S-01）`);
+    if (seen.has(spec.id)) add('P14', 'error', `${label} 契约编号重复：${spec.id}`);
+    seen.add(spec.id);
+    const cells = spec.cells || [];
+    const labels = ['编号', '契约', '输入', '输出', '错误语义', '验收标准'];
+    if (cells.length < 6) {
+      add('P14', 'error', `${label} 契约 ${spec.id} 只有 ${cells.length} 列：编号 / 契约 / 输入 / 输出 / 错误语义 / 验收标准 六列都要`);
+      continue;
+    }
+    cells.forEach((cell, index) => {
+      if (!filled(cell)) {
+        add('P14', 'error', `${label} 契约 ${spec.id} 的「${labels[index] || `第 ${index + 1} 列`}」没填`);
+      }
+    });
+    if (cells[0] !== spec.id) {
+      add('P14', 'error', `${label} 契约 ${spec.id} 的编号列写的是 ${cells[0]}（两处必须一致）`);
+    }
+  }
+}
+
+function checkTdd(page, label) {
+  const specs = new Set((page.specs || []).map((spec) => spec.id));
+  const cases = page.cases || [];
+  for (const item of cases) {
+    if (!item.spec || !specs.has(item.spec)) {
+      add('P15', 'error', `${label} 用例 ${item.id} 的 data-spec=${item.spec === null ? '缺失' : item.spec} 没有对应契约`);
+    }
+    if (!['red', 'green'].includes(item.tdd)) {
+      add('P15', 'error', `${label} 用例 ${item.id} 的 data-tdd 必须是 red 或 green（现在是 ${item.tdd === null ? '缺失' : item.tdd}）`);
+    }
+  }
+  for (const id of specs) {
+    if (!cases.some((item) => item.spec === id)) {
+      add('P15', 'error', `${label} 契约 ${id} 没有测试用例：TDD 要求每条契约先有测试`);
+    }
+  }
+  if (page.status === '完成' && cases.some((item) => item.tdd === 'red')) {
+    add('P15', 'error', `${label} 标了「完成」但还有 red 用例：先把它们变绿`);
+  }
+}
+
+function checkStepSpecs(page, label) {
+  const specs = new Set((page.specs || []).map((spec) => spec.id));
+  (page.steps || []).forEach((step, index) => {
+    if (!step.spec || !specs.has(step.spec)) {
+      add('P16', 'error', `${label} 第 ${index + 1} 步没有绑定契约（data-spec 缺失或指向不存在的 ${step.spec}）`);
+    }
+  });
+}
+
+function checkTask(name, html, page) {
+  const label = `${DIR}/${name}/${PAGE}`;
+
+  if (page.steps.length === 0) {
+    add('P4', 'error', `${label} 里没有步骤：任务规划至少 2 步，用 <li class="step" data-step="1">`);
+    return page;
+  }
+  if (page.steps.length < 2) {
+    add('P4', 'error', `${label} 只有 1 步：任务规划至少 2 步（第 2 步可以是「验证 / 回归」）`);
+  }
+  page.steps.forEach((step, index) => {
+    if (step.no !== index + 1) {
+      add('P4', 'error', `${label} 第 ${index + 1} 步的 data-step 是 ${step.no === null ? '缺失' : step.no}：编号必须从 1 连续`);
+    }
+    if (!filled(step.title)) {
+      add('P4', 'error', `${label} 第 ${index + 1} 步还没有真实标题（仍是占位文本）`);
+    }
+    if (!Number.isFinite(step.pct) || step.pct < 0 || step.pct > 100) {
+      add('P4', 'error', `${label} 第 ${index + 1} 步的 data-pct 不是 0..100 的数值`);
+    } else if (step.pctText && /^\d+%$/.test(step.pctText) && Number(step.pctText.replace('%', '')) !== step.pct) {
+      add('P4', 'error', `${label} 第 ${index + 1} 步文本 ${step.pctText} 与 data-pct=${step.pct} 不一致`);
+    }
+  });
+
+  if (page.declaredTotal && page.declaredTotal !== '—' && /^\d+%$/.test(page.declaredTotal)) {
+    if (Number(page.declaredTotal.replace('%', '')) !== page.total) {
+      add('P5', 'error', `${label} 手填总进度 ${page.declaredTotal} ≠ 步骤汇总 ${page.total}%（留 “—”，让脚本回写）`);
+    }
+  }
+
+  if (page.total === 100 && /待验收|待跑|未验收/.test(html)) {
+    add('P6', 'error', `${label} 总进度 100% 但仍有待跑 / 待验收项`);
+  }
+
+  if (page.cases.length === 0) {
+    add('P8', 'error', `${label} 没有测试用例：每条挂在某一步上（<li class="case" data-case="T-01" data-step="1">）`);
+  }
+  const seen = new Set();
+  for (const item of page.cases) {
+    if (!item.id) {
+      add('P8', 'error', `${label} 有测试用例缺少 data-case（用例名是唯一标识）`);
+      continue;
+    }
+    if (seen.has(item.id)) add('P8', 'error', `${label} 测试用例 data-case 重复：${item.id}`);
+    seen.add(item.id);
+    if (!filled(item.text)) add('P8', 'error', `${label} 测试用例 ${item.id} 没有内容（写清跑什么、断言什么）`);
+    const stepNo = Number(item.step);
+    if (!Number.isInteger(stepNo) || stepNo < 1 || stepNo > page.steps.length) {
+      add('P8', 'error', `${label} 测试用例 ${item.id} 的 data-step=${item.step === null ? '缺失' : item.step} 指向不存在的步骤`);
+    }
+  }
+
+  if (page.total > 0 && page.log.length === 0) {
+    add('P9', 'error', `${label} 有进度但没有「进度记录」：每次变化追加 <li data-at="..." data-total="...">`);
+  }
+  if (page.log.length > 0) {
+    const last = page.log[page.log.length - 1];
+    if (last.total !== page.total) {
+      add('P9', 'error', `${label} 进度记录最后一条是 ${last.total}%，与页面汇总 ${page.total}% 不一致（改完补一条记录）`);
+    }
+    let previous = -Infinity;
+    for (const entry of page.log) {
+      const time = Date.parse(entry.at);
+      if (!Number.isFinite(time)) {
+        add('P9', 'error', `${label} 进度记录的 data-at 不是合法时间：${entry.at}`);
+        break;
+      }
+      if (time < previous) {
+        add('P9', 'error', `${label} 进度记录的 data-at 没有递增（新记录追加在最后）`);
+        break;
+      }
+      previous = time;
+    }
+  }
+
+  if (!STATUSES.includes(page.status)) {
+    add('P10', 'error', `${label} 的 data-task-status 是 ${page.status === null ? '缺失' : page.status}，只能是：${STATUSES.join(' / ')}`);
+  } else if ((page.status === '完成' || page.status === '待验收') && page.steps.some((s) => s.pct !== 100)) {
+    add('P10', 'error', `${label} 标了「${page.status}」但还有步骤没到 100%`);
+  }
+
+  checkDomain(page, label);
+  checkSpecs(page, label);
+  checkTdd(page, label);
+  checkStepSpecs(page, label);
+
+  return page;
+}
+
+const UI_COMPONENTS = [
+  'Button', 'Table', 'Form', 'Input', 'Select', 'Tag', 'Progress', 'Modal',
+  'Drawer', 'Pagination', 'Empty', 'Statistic', 'Card', 'Alert', 'Descriptions', 'Skeleton',
+];
+
+/**
+ * UI 设计稿（P20）：必须是 antd v5 风格、离线、带说明。
+ * 没有设计稿只警告——不是每个任务都有界面。
+ */
+/**
+ * 方案页（P21）：先确认方案，再开始推进。
+ * 判定只看结构是否齐、状态是否确认，不评价方案写得好不好。
+ */
+function checkPlan(name, page, base) {
+  const dir = path.join(base, name);
+  const file = path.join(dir, 'plan.html');
+  const label = `${DIR}/${name}/plan.html`;
+  if (!fs.existsSync(file)) {
+    add('P21', 'error', `缺少 ${label}：任务要先写方案再开工（跑 dsh-plugin-harness-cli plan ${name}）`);
+    return;
+  }
+  const html = readFile(file) || '';
+  const sections = ['goal', 'approach', 'ui', 'flow', 'risks', 'accept', 'confirm'];
+  const missing = sections.filter((section) => !new RegExp(`data-section="${section}"`).test(html));
+  if (missing.length > 0) {
+    add('P21', 'error', `${label} 缺少章节：${missing.join(' / ')}（目标 / 方案 / 页面设计 / 流程交互 / 风险 / 验收 / 确认）`);
+  }
+  const status = attr(html, 'data-plan-status');
+  if (!['待确认', '已确认'].includes(status)) {
+    add('P21', 'error', `${label} 的 data-plan-status 只能是 待确认 / 已确认（当前 ${status === null ? '缺失' : status}）`);
+    return;
+  }
+  if (status === '已确认') {
+    const by = attr(html, 'data-confirmed-by');
+    const at = attr(html, 'data-confirmed-at');
+    if (!by || by.trim().length === 0) add('P21', 'error', `${label} 已确认但没有写确认人（data-confirmed-by）`);
+    if (!at || !Number.isFinite(Date.parse(at))) add('P21', 'error', `${label} 已确认但没有合法确认时间（data-confirmed-at）`);
+  }
+  const started = page.total > 0 || (page.status !== null && page.status !== '进行中');
+  if (started && status !== '已确认') {
+    add(
+      'P21',
+      'error',
+      `${label} 方案还没确认，但任务已经有进度（${page.total}%）或状态是「${page.status}」：先确认方案再开工`
+    );
+  }
+
+  if (!started) return;
+
+  // 已开工：文档必须还是「确认时那一版」，且复盘已通过
+  const docsDir = path.join(ROOT, SPECS, name);
+  const docText = SPEC_FILES.map((file) => {
+    const text = readFile(path.join(docsDir, file));
+    return text === null ? '' : text.replace(/\r\n/g, '\n').trim();
+  }).join('\n');
+  const hash = `sha1:${crypto.createHash('sha1').update(docText).digest('hex')}`;
+  const confirmedHash = attr(html, 'data-docs-hash');
+  if (confirmedHash !== hash) {
+    add(
+      'P22',
+      'error',
+      `${SPECS}/${name}/ 在方案确认后被改过（指纹不一致）：重新跑 review 与 plan --confirm，再推进度`
+    );
+  }
+  const review = readFile(path.join(docsDir, 'review.md'));
+  if (review === null || !/状态：\s*已通过/.test(review)) {
+    add('P22', 'error', `${SPECS}/${name}/review.md 缺失或未通过：人改文档后必须重新复盘并确认`);
+  }
+}
+
+/**
+ * 视图 → 规格的同步判定（P23 / P24）。
+ * `docs/wiki` 与 `ui/index.html` 是业务视图；它们变了，`docs/specs` 必须跟着变。
+ */
+function checkSpecsSync(name, base) {
+  const specDir = path.join(ROOT, SPECS, name);
+  const design = readFile(path.join(specDir, 'design.md')) || '';
+  const uiFile = path.join(base, name, 'ui', 'index.html');
+  if (fs.existsSync(uiFile)) {
+    const uiText = (readFile(uiFile) || '').replace(/\r\n/g, '\n').trim();
+    const hash = `sha1:${crypto.createHash('sha1').update(uiText).digest('hex')}`;
+    const block = /<!-- ui-design:begin -->([\s\S]*?)<!-- ui-design:end -->/.exec(design);
+    const recorded = block ? (/指纹：\s*`?(sha1:[0-9a-f]{40})`?/.exec(block[1]) || [])[1] : null;
+    if (recorded === null) {
+      add('P23', 'error', `${SPECS}/${name}/design.md 缺少 UI 摘要块：跑 dsh-plugin-harness-cli ui ${name} 同步`);
+    } else if (recorded !== hash) {
+      add('P23', 'error', `${SPECS}/${name}/design.md 的 UI 指纹已过期：设计稿改过，跑 ui ${name}（或 plan ${name}）同步`);
+    }
+  }
+
+  const wikiDir = path.join(ROOT, WIKI);
+  let wikiFiles = [];
+  try {
+    wikiFiles = fs.readdirSync(wikiDir).filter((file) => file.endsWith('.md')).sort();
+  } catch (err) {
+    wikiFiles = [];
+  }
+  if (wikiFiles.length > 0) {
+    const text = wikiFiles
+      .map((file) => `${file}\n${(readFile(path.join(wikiDir, file)) || '').replace(/\r\n/g, '\n').trim()}`)
+      .join('\n');
+    const hash = `sha1:${crypto.createHash('sha1').update(text).digest('hex')}`;
+    const proposal = readFile(path.join(specDir, 'proposal.md')) || '';
+    const block = /<!-- wiki-context:begin -->([\s\S]*?)<!-- wiki-context:end -->/.exec(proposal);
+    const recorded = block ? (/指纹：\s*`?(sha1:[0-9a-f]{40})`?/.exec(block[1]) || [])[1] : null;
+    if (recorded === null) {
+      add('P24', 'error', `${SPECS}/${name}/proposal.md 缺少业务背景块：跑 dsh-plugin-harness-cli wiki 同步`);
+    } else if (recorded !== hash) {
+      add('P24', 'error', `${SPECS}/${name}/proposal.md 的业务指纹已过期：docs/wiki 改过，跑 wiki 同步`);
+    }
+  }
+}
+
+function checkUi(name, base) {
+  const dir = path.join(base, name, 'ui');
+  const page = path.join(dir, 'index.html');
+  const label = `${DIR}/${name}/ui`;
+  if (!fs.existsSync(page)) {
+    add('P20', 'warn', `${DIR}/${name} 还没有 UI 设计稿（需要界面时跑 dsh-plugin-harness-cli ui ${name}）`);
+    return;
+  }
+  const html = readFile(page) || '';
+  if (!/<html[^>]*data-design-system="antd"/.test(html) && !/<html[^>]*data-antd=/.test(html)) {
+    add('P20', 'error', `${label}/index.html 没有 antd 设计体系标记（<html data-design-system="antd">）`);
+  }
+  if (!/--ant-color-primary\s*:/.test(html)) {
+    add('P20', 'error', `${label}/index.html 缺少 antd 设计令牌（:root 里的 --ant-* 变量）`);
+  }
+  const used = UI_COMPONENTS.filter((component) => new RegExp(`\\b${component}\\b`).test(html));
+  if (used.length < 4) {
+    add('P20', 'error', `${label}/index.html 只用到 ${used.length} 个 antd 组件：至少 4 个（Button / Table / Form / Tag…）`);
+  }
+  const foreign = ['bootstrap', 'tailwind', 'bulma', 'element-plus', 'vant'].filter((name) =>
+    new RegExp(name, 'i').test(html)
+  );
+  if (foreign.length > 0) {
+    add('P20', 'error', `${label}/index.html 混入了非 antd 设计体系：${foreign.join(', ')}`);
+  }
+  const readme = path.join(dir, 'README.md');
+  if (!fs.existsSync(readme)) {
+    add('P20', 'error', `${label} 缺少 README.md：组件清单 / 状态 / 契约对应没写下来`);
+    return;
+  }
+  const text = readFile(readme) || '';
+  const missingSections = ['组件清单', '状态', '契约'].filter((section) => !text.includes(section));
+  for (const section of missingSections) {
+    add('P20', 'error', `${label}/README.md 缺少「${section}」部分`);
+  }
+  if (missingSections.length === 0 && used.length >= 4) {
+    add('P20', 'pass', `${label}/index.html 是 antd 风格（${used.length} 个组件，${foreign.length === 0 ? '无混入' : '有混入'}）`);
+  }
+}
+
+function indexRows(chunk) {
+  return [
+    ...String(chunk === null ? '' : chunk).matchAll(
+      /<tr[^>]*data-task="([^"]*)"[^>]*data-total="([^"]*)"[^>]*data-status="([^"]*)"[^>]*data-ui="([^"]*)"[^>]*>/g
+    ),
+  ].map((m) => ({task: m[1], total: Number(m[2]), status: m[3], ui: m[4]}));
+}
+
+function region(html, name) {
+  const m = new RegExp(`<!-- ${name}:begin -->([\\s\\S]*?)<!-- ${name}:end -->`).exec(html);
+  return m ? m[1] : null;
+}
+
+function checkIndex(base, pages) {
+  const html = readFile(path.join(base, INDEX));
+  if (html === null) {
+    add('P11', 'error', `缺少汇总页 ${DIR}/${INDEX}：跑 node scripts/prototype-check.js --sync 生成`);
+    return;
+  }
+  const active = indexRows(region(html, 'active'));
+  const done = indexRows(region(html, 'done'));
+  const expectActive = pages.filter((p) => p.status === '进行中' || p.status === '待验收');
+  const expectDone = pages.filter((p) => p.status === '完成');
+
+  const same = (rows, expected) => {
+    const actual = new Map(rows.map((r) => [r.task, r]));
+    if (actual.size !== expected.length) return false;
+    return expected.every((p) => {
+      const row = actual.get(p.name);
+      return (
+        row !== undefined &&
+        row.total === p.total &&
+        row.status === p.status &&
+        row.ui === (p.ui ? 'yes' : 'no')
+      );
+    });
+  };
+  const describe = (rows) => rows.map((r) => `${r.task || r.name}(${r.total}%)`).join(', ') || '空';
+
+  if (!same(active, expectActive)) {
+    add(
+      'P11',
+      'error',
+      `${DIR}/${INDEX} 的「进行中」区已过期：应为 ${describe(expectActive)}，实际 ${describe(active)}；跑 node scripts/prototype-check.js --sync`
+    );
+  }
+  if (!same(done, expectDone)) {
+    add(
+      'P11',
+      'error',
+      `${DIR}/${INDEX} 的「最近完成」区已过期：应为 ${describe(expectDone)}，实际 ${describe(done)}；跑 node scripts/prototype-check.js --sync`
+    );
+  }
+}
+
+/** 用各任务页重写汇总页的两块内容区（其余骨架不动）。 */
+function syncIndex(base, pages) {
+  const file = path.join(base, INDEX);
+  const html = readFile(file);
+  if (html === null) {
+    add('P11', 'error', `缺少汇总页 ${DIR}/${INDEX}：先跑 dsh-plugin-harness-cli init --preset prototype`);
+    return;
+  }
+  const row = (task) =>
+    `      <tr data-task="${task.name}" data-total="${task.total}" data-status="${task.status}" data-ui="${task.ui ? 'yes' : 'no'}">` +
+    `<td><a href="${encodeURIComponent(task.name)}/${PAGE}">${task.name}</a></td>` +
+    `<td class="num">${task.total}%</td>` +
+    `<td>${task.status}</td>` +
+    `<td>${task.ui ? '<a href="' + encodeURIComponent(task.name) + '/ui/index.html">设计稿</a>' : '—'}</td>` +
+    `<td>${task.updated || '—'}</td></tr>`;
+
+  const active = pages
+    .filter((t) => t.status === '进行中' || t.status === '待验收')
+    .sort((a, b) => b.total - a.total || (a.name < b.name ? -1 : 1));
+  const done = pages
+    .filter((t) => t.status === '完成')
+    .sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+
+  const replaceRegion = (text, name, rows) => {
+    const re = new RegExp(`(<!-- ${name}:begin -->)[\\s\\S]*?(<!-- ${name}:end -->)`);
+    if (!re.test(text)) return text;
+    return text.replace(re, `$1\n${rows.join('\n')}${rows.length ? '\n' : ''}$2`);
+  };
+
+  let next = replaceRegion(html, 'active', active.map(row));
+  next = replaceRegion(next, 'done', done.map(row));
+  if (!DRY_RUN) fs.writeFileSync(file, next);
+  add('P12', 'pass', `${DRY_RUN ? '将同步' : '已同步'} ${DIR}/${INDEX}：进行中 ${active.length} 个，完成 ${done.length} 个`);
+}
+
+function pruneOld(base, dirs) {
+  if (dirs.length <= KEEP) return;
+  const ranked = dirs
+    .map((name) => {
+      const file = path.join(base, name, PAGE);
+      let stamp = 0;
+      try {
+        stamp = fs.statSync(file).mtimeMs;
+      } catch (err) {
+        try {
+          stamp = fs.statSync(path.join(base, name)).mtimeMs;
+        } catch (err2) {
+          stamp = 0;
+        }
+      }
+      return {name, stamp};
+    })
+    .sort((a, b) => b.stamp - a.stamp);
+  for (const victim of ranked.slice(KEEP)) {
+    if (!DRY_RUN) fs.rmSync(path.join(base, victim.name), {recursive: true, force: true});
+    add('P1', 'warn', `${DRY_RUN ? '将删除' : '已删除'}旧任务目录 ${DIR}/${victim.name}（保留最近 ${KEEP} 个）`);
+  }
+}
+
+function main() {
+  const base = path.join(ROOT, DIR);
+  if (!fs.existsSync(base)) {
+    add('P0', 'error', `缺少进度页目录 ${DIR}/（约定本身要在仓库里）`);
+    return;
+  }
+  if (!fs.existsSync(path.join(base, 'README.md'))) {
+    add('P0', 'error', `缺少 ${DIR}/README.md：约定没写下来，Agent 只能靠猜`);
+  }
+
+  const dirs = taskDirs(base);
+  if (dirs === null) {
+    add('P0', 'error', `无法读取 ${DIR}/`);
+    return;
+  }
+
+  if (PRUNE) {
+    pruneOld(base, dirs);
+  } else if (dirs.length > KEEP) {
+    add('P1', 'error', `${dirs.length} 个任务目录超过上限 ${KEEP}；先跑 --prune 再提交`);
+  }
+
+  const current = readFile(path.join(ROOT, DOCS_CURRENT));
+  const missingInDocs = [];
+  const pages = [];
+
+  for (const name of dirs) {
+    if (!/^[\p{L}\p{N}][\p{L}\p{N}_-]*$/u.test(name)) {
+      add('P2', 'error', `任务目录 ${DIR}/${name} 名字不合法：只能用字母 / 数字 / 中文 / 中划线 / 下划线（不能有空格或斜杠）`);
+    }
+    const html = readFile(path.join(base, name, PAGE));
+    if (html === null) {
+      add('P3', 'error', `${DIR}/${name} 缺少 ${PAGE}`);
+      continue;
+    }
+    const page = parsePage(html);
+    page.ui = fs.existsSync(path.join(base, name, 'ui', 'index.html'));
+    // --sync 只负责从页面汇总，不做页面级判定（新建页里还留着占位步骤是正常中间态）
+    if (!SYNC) {
+      checkTask(name, html, page);
+      checkDocs(name, page, `${DIR}/${name}/${PAGE}`);
+      checkPlan(name, page, base);
+      checkUi(name, base);
+      checkSpecsSync(name, base);
+    }
+    pages.push({name, ...page});
+    if (current !== null && !current.includes(name)) missingInDocs.push(name);
+  }
+
+  if (missingInDocs.length > 0) {
+    add(
+      'P7',
+      'warn',
+      `${DOCS_CURRENT} 里缺少 ${missingInDocs.length} 个任务条目：${missingInDocs.slice(0, 5).join(', ')}` +
+        (missingInDocs.length > 5 ? ' …' : '')
+    );
+  }
+
+  if (SYNC) syncIndex(base, pages);
+  else checkIndex(base, pages);
+}
+
+try {
+  main();
+} catch (err) {
+  process.stderr.write(`prototype-check 内部错误：${err && err.stack ? err.stack : err}\n`);
+  process.exitCode = 2;
+}
+
+if (AS_JSON) {
+  process.stdout.write(JSON.stringify({checks: results}, null, 2) + '\n');
+} else if (results.length === 0) {
+  process.stdout.write('✅ 任务进度页检查通过\n');
+} else {
+  for (const r of results) {
+    const mark = r.level === 'error' ? '✗' : r.level === 'pass' ? '·' : '!';
+    process.stdout.write(`  ${mark} [${r.id}] ${r.message}\n`);
+  }
+}
+
+if (process.exitCode !== 2) {
+  process.exitCode = results.some((r) => r.level === 'error') ? 1 : 0;
+}

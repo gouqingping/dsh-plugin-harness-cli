@@ -1,0 +1,17 @@
+# Google Style Guide 要求 LF。Windows 上若 core.autocrlf=true，
+# 没有这个文件会导致 CRLF 进入工作区，从而让格式化工具与检查工具打架。
+* text=auto eol=lf
+
+# Windows 脚本必须保留 CRLF，否则 cmd 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：禁止换行转换与文本 diff
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.jar  binary
+*.zip  binary

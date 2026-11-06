@@ -1,0 +1,51 @@
+pipeline:
+  name: {{project.name}} CI
+  identifier: {{ciIdentifier}}
+  projectIdentifier: <+input>
+  orgIdentifier: <+input>
+  tags:
+    project: {{project.name}}
+    harness: dsh-plugin-harness-cli
+  properties:
+    ci:
+      codebase:
+        connectorRef: <+input>
+        repoName: <+input>
+        build: <+input>
+        depth: 1
+        sslVerify: true
+  stages:
+    - stage:
+        name: Verify
+        identifier: verify
+        type: CI
+        spec:
+          cloneCodebase: true
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: <+input>
+              namespace: <+input>
+              automountServiceAccountToken: true
+              nodeSelector: {}
+              os: Linux
+          execution:
+            steps:
+{{#each ciSteps}}              - step:
+                  name: {{name}}
+                  identifier: {{identifier}}
+                  type: Run
+                  spec:
+                    connectorRef: <+input>
+                    image: {{image}}
+                    shell: Sh
+                    command: |-
+{{#each commandLines}}                      {{.}}
+{{/each}}{{/each}}        when:
+          pipelineStatus: Success
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: MarkAsFailure

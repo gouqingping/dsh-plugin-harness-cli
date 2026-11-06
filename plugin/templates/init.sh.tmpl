@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# init.sh —— 一键初始化开发环境（幂等，可重复执行）
+# 由 dsh-plugin-harness-cli 生成。顺序固定：查环境 → 配变量 → 装依赖 → 验证 → 打印下一步。
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+echo "==> 检查运行环境"
+{{#each preflightLines}}{{.}}
+{{/each}}
+echo "   运行环境就绪"
+
+echo "==> 准备环境变量"
+if [ -f .env ]; then
+  echo "   .env 已存在，跳过"
+elif [ -f .env.example ]; then
+  cp .env.example .env
+  echo "   已从 .env.example 生成 .env，请按需修改"
+else
+  echo "   未发现 .env.example，跳过"
+fi
+
+echo "==> 安装依赖"
+{{#if installCmd}}{{installCmd}}
+{{/if}}{{#unless installCmd}}echo "   跳过：尚未定义安装命令"
+{{/unless}}
+echo "==> 验证环境"
+{{#if verifyCmd}}{{verifyCmd}}
+{{/if}}{{#unless verifyCmd}}echo "   跳过：尚未定义验证命令"
+{{/unless}}
+echo ""
+echo "✅ 环境就绪。下一步："
+echo "   启动开发：{{devCmd}}"
+echo "   跑测试：  {{testCmd}}"
+echo "   提交前：  {{gateCmd}}"

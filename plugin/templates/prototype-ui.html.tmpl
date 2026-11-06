@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN" data-design-system="antd" data-antd="v5">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{task}} · UI 设计（antd）</title>
+<!--
+  antd 设计规范落地页（离线、零依赖）。
+  设计令牌全部来自 antd v5 默认主题的公开 token，改主题请改 :root 里的 --ant-*。
+  组件以「静态 HTML + antd 视觉」呈现：不引入 React，也不从 CDN 拉 antd，
+  目的是让实施/设计/前端看到同一套间距、颜色、状态与信息架构。
+-->
+<style>
+  /* ===== antd v5 tokens（默认主题，按需覆盖） ===== */
+  :root {
+    --ant-color-primary: #1677ff;
+    --ant-color-primary-hover: #4096ff;
+    --ant-color-success: #52c41a;
+    --ant-color-warning: #faad14;
+    --ant-color-error: #ff4d4f;
+    --ant-color-text: rgba(0, 0, 0, 0.88);
+    --ant-color-text-secondary: rgba(0, 0, 0, 0.65);
+    --ant-color-text-tertiary: rgba(0, 0, 0, 0.45);
+    --ant-color-border: #d9d9d9;
+    --ant-color-border-secondary: #f0f0f0;
+    --ant-color-bg-container: #ffffff;
+    --ant-color-bg-layout: #f5f5f5;
+    --ant-color-bg-elevated: #ffffff;
+    --ant-color-fill-secondary: rgba(0, 0, 0, 0.06);
+    --ant-border-radius: 6px;
+    --ant-border-radius-lg: 8px;
+    --ant-control-height: 32px;
+    --ant-font-size: 14px;
+    --ant-line-height: 1.5714;
+    --ant-box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ant-color-bg-layout); color: var(--ant-color-text);
+    font: var(--ant-font-size)/var(--ant-line-height) -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  a { color: var(--ant-color-primary); text-decoration: none; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+         background: var(--ant-color-fill-secondary); border-radius: 4px; padding: 0 4px; }
+
+  /* ===== Layout / Sider / Header ===== */
+  .ant-layout { display: flex; min-height: 100vh; }
+  .ant-layout-sider { width: 208px; flex: 0 0 208px; background: #001529; color: rgba(255, 255, 255, 0.65); padding: 16px 0; }
+  .ant-layout-sider .logo { height: 32px; margin: 0 16px 16px; color: #fff; font-weight: 600; letter-spacing: .5px; }
+  .ant-layout-sider .logo small { display: block; font-weight: 400; font-size: 12px; color: rgba(255, 255, 255, 0.45); }
+  .ant-menu-item { height: 40px; line-height: 40px; padding: 0 16px; margin: 4px 8px; border-radius: var(--ant-border-radius); cursor: default; }
+  .ant-menu-item.is-active { background: var(--ant-color-primary); color: #fff; }
+  .ant-layout-body { flex: 1; min-width: 0; }
+  .ant-layout-header { height: 64px; background: var(--ant-color-bg-container); border-bottom: 1px solid var(--ant-color-border-secondary);
+                       display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
+  .ant-breadcrumb { color: var(--ant-color-text-tertiary); font-size: 14px; }
+  .ant-breadcrumb b { font-weight: 400; color: var(--ant-color-text); }
+  .ant-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--ant-color-primary); color: #fff;
+                display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+  .ant-layout-content { padding: 24px; }
+
+  /* ===== PageHeader / Card / Typography ===== */
+  .ant-page-header { background: var(--ant-color-bg-container); border-radius: var(--ant-border-radius-lg);
+                     padding: 16px 24px; margin-bottom: 16px; box-shadow: var(--ant-box-shadow); }
+  .ant-page-header h1 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 600; }
+  .ant-page-header p { margin: 4px 0 0; color: var(--ant-color-text-secondary); }
+  .ant-card { background: var(--ant-color-bg-container); border-radius: var(--ant-border-radius-lg); box-shadow: var(--ant-box-shadow); }
+  .ant-card + .ant-card { margin-top: 16px; }
+  .ant-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                   padding: 0 24px; min-height: 56px; border-bottom: 1px solid var(--ant-color-border-secondary); }
+  .ant-card-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .ant-card-body { padding: 24px; }
+  .ant-typography-secondary { color: var(--ant-color-text-secondary); }
+
+  /* ===== Statistic ===== */
+  .ant-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .ant-col { flex: 1 1 0; min-width: 180px; }
+  .ant-statistic-title { color: var(--ant-color-text-secondary); font-size: 14px; }
+  .ant-statistic-content { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ant-statistic-content small { font-size: 14px; font-weight: 400; color: var(--ant-color-text-tertiary); }
+
+  /* ===== Buttons / Inputs / Select ===== */
+  .ant-btn { height: var(--ant-control-height); padding: 4px 15px; border-radius: var(--ant-border-radius);
+             border: 1px solid var(--ant-color-border); background: var(--ant-color-bg-container); color: var(--ant-color-text);
+             font-size: var(--ant-font-size); cursor: default; }
+  .ant-btn-primary { background: var(--ant-color-primary); border-color: var(--ant-color-primary); color: #fff; }
+  .ant-btn-primary:hover { background: var(--ant-color-primary-hover); }
+  .ant-btn-text { border-color: transparent; background: transparent; color: var(--ant-color-primary); padding: 0 4px; height: auto; }
+  .ant-btn-danger { color: var(--ant-color-error); border-color: transparent; background: transparent; }
+  .ant-input, .ant-select { height: var(--ant-control-height); border: 1px solid var(--ant-color-border);
+                            border-radius: var(--ant-border-radius); padding: 4px 11px; background: var(--ant-color-bg-container);
+                            color: var(--ant-color-text); display: inline-flex; align-items: center; min-width: 180px; }
+  .ant-input::placeholder { color: var(--ant-color-text-tertiary); }
+  .ant-select { min-width: 140px; color: var(--ant-color-text-secondary); justify-content: space-between; }
+  .ant-space { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  /* ===== Table ===== */
+  table.ant-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .ant-table thead th { background: #fafafa; color: var(--ant-color-text); font-weight: 600; text-align: left;
+                        padding: 12px 16px; border-bottom: 1px solid var(--ant-color-border-secondary); white-space: nowrap; }
+  .ant-table tbody td { padding: 12px 16px; border-bottom: 1px solid var(--ant-color-border-secondary); }
+  .ant-table tbody tr:hover { background: #fafafa; }
+  .ant-table-cell-num { font-variant-numeric: tabular-nums; }
+  .ant-pagination { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 16px; color: var(--ant-color-text-secondary); }
+  .ant-pagination .item { min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+                          border: 1px solid var(--ant-color-border); border-radius: var(--ant-border-radius); }
+  .ant-pagination .item.is-active { border-color: var(--ant-color-primary); color: var(--ant-color-primary); }
+
+  /* ===== Tag / Badge / Progress ===== */
+  .ant-tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; margin: 0;
+             border: 1px solid transparent; border-radius: 4px; font-size: 12px; }
+  .ant-tag-blue { color: #0958d9; background: #e6f4ff; border-color: #91caff; }
+  .ant-tag-green { color: #389e0d; background: #f6ffed; border-color: #b7eb8f; }
+  .ant-tag-gold { color: #d48806; background: #fffbe6; border-color: #ffe58f; }
+  .ant-tag-red { color: #cf1322; background: #fff1f0; border-color: #ffa39e; }
+  .ant-tag-default { color: var(--ant-color-text-secondary); background: #fafafa; border-color: var(--ant-color-border); }
+  .ant-progress { display: inline-flex; align-items: center; gap: 8px; width: 160px; }
+  .ant-progress-track { flex: 1; height: 8px; border-radius: 100px; background: rgba(0, 0, 0, 0.06); overflow: hidden; }
+  .ant-progress-fill { height: 100%; width: 60%; border-radius: 100px; background: var(--ant-color-primary); }
+  .ant-progress-text { font-size: 12px; color: var(--ant-color-text-secondary); font-variant-numeric: tabular-nums; }
+
+  /* ===== Alert / Descriptions / Empty / Skeleton ===== */
+  .ant-alert { display: flex; gap: 8px; padding: 8px 12px; border-radius: var(--ant-border-radius-lg);
+               border: 1px solid #91caff; background: #e6f4ff; color: var(--ant-color-text); }
+  .ant-alert-warning { border-color: #ffe58f; background: #fffbe6; }
+  .ant-descriptions { display: grid; grid-template-columns: 120px 1fr; gap: 8px 16px; margin: 0; }
+  .ant-descriptions dt { color: var(--ant-color-text-secondary); }
+  .ant-descriptions dd { margin: 0; }
+  .ant-empty { padding: 32px 0; text-align: center; color: var(--ant-color-text-tertiary); }
+  .ant-skeleton { background: linear-gradient(90deg, #f2f2f2 25%, #fafafa 37%, #f2f2f2 63%);
+                  background-size: 400% 100%; animation: antSkeleton 1.4s ease infinite; border-radius: 4px; height: 16px; }
+  @keyframes antSkeleton { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+  /* ===== Form ===== */
+  .ant-form-item { display: grid; grid-template-columns: 96px 1fr; gap: 8px 16px; align-items: start; margin-bottom: 16px; }
+  .ant-form-item-label { color: var(--ant-color-text); text-align: right; padding-top: 5px; }
+  .ant-form-item-label em { color: var(--ant-color-error); font-style: normal; margin-right: 4px; }
+  .ant-form-item-control .ant-input { width: 100%; }
+  .ant-radio, .ant-checkbox { display: inline-flex; align-items: center; gap: 6px; margin-right: 16px; color: var(--ant-color-text); }
+  .ant-switch { width: 44px; height: 22px; border-radius: 100px; background: var(--ant-color-primary); position: relative; display: inline-block; }
+  .ant-switch::after { content: ""; position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; }
+
+  /* ===== Tabs ===== */
+  .ant-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--ant-color-border-secondary); padding: 0 24px; }
+  .ant-tabs .tab { padding: 12px 0; color: var(--ant-color-text-secondary); cursor: default; }
+  .ant-tabs .tab.is-active { color: var(--ant-color-primary); box-shadow: inset 0 -2px 0 var(--ant-color-primary); }
+
+  /* ===== 响应式 ===== */
+  @media (max-width: 768px) {
+    .ant-layout-sider { display: none; }
+    .ant-layout-content { padding: 16px; }
+    .ant-descriptions { grid-template-columns: 96px 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="ant-layout">
+  <!-- antd: Layout.Sider + Menu -->
+  <aside class="ant-layout-sider">
+    <div class="logo">{{project.name}}<small>管理后台</small></div>
+    <nav class="ant-menu">
+      <div class="ant-menu-item">工作台</div>
+      <div class="ant-menu-item is-active">{{task}}</div>
+      <div class="ant-menu-item">数据管理</div>
+      <div class="ant-menu-item">系统设置</div>
+    </nav>
+  </aside>
+
+  <div class="ant-layout-body">
+    <!-- antd: Layout.Header + Breadcrumb -->
+    <header class="ant-layout-header">
+      <div class="ant-breadcrumb">首页 / <b>{{task}}</b></div>
+      <div class="ant-space"><span class="ant-typography-secondary">产品设计稿</span><span class="ant-avatar">U</span></div>
+    </header>
+
+    <main class="ant-layout-content" data-ui-task="{{task}}">
+      <!-- antd: PageHeader -->
+      <section class="ant-page-header">
+        <h1>{{task}}</h1>
+        <p>用户原话：{{userWords}} · 设计体系：Ant Design v5（默认主题）· 生成时间：{{todayIso}}</p>
+      </section>
+
+      <!-- antd: Alert -->
+      <div class="ant-alert" style="margin-bottom:16px;">
+        <strong>设计说明</strong>
+        <span>本页是静态设计稿：颜色、间距、状态全部按 antd 默认主题实现；真实实现请用 antd 组件库，不要另起一套视觉。</span>
+      </div>
+
+      <!-- antd: Statistic 卡片 -->
+      <section class="ant-row" style="margin-bottom:16px;">
+        <div class="ant-col ant-card"><div class="ant-card-body">
+          <div class="ant-statistic-title">进行中任务</div>
+          <div class="ant-statistic-content">3 <small>个</small></div>
+        </div></div>
+        <div class="ant-col ant-card"><div class="ant-card-body">
+          <div class="ant-statistic-title">今日完成</div>
+          <div class="ant-statistic-content">12 <small>个</small></div>
+        </div></div>
+        <div class="ant-col ant-card"><div class="ant-card-body">
+          <div class="ant-statistic-title">平均耗时</div>
+          <div class="ant-statistic-content">2.4 <small>小时</small></div>
+        </div></div>
+      </section>
+
+      <!-- antd: Card + Tabs + Toolbar + Table -->
+      <section class="ant-card">
+        <div class="ant-card-head"><h2>任务列表</h2>
+          <div class="ant-space">
+            <span class="ant-input">搜索任务名称</span>
+            <span class="ant-select">全部状态 <span>▾</span></span>
+            <span class="ant-btn ant-btn-primary">新建任务</span>
+          </div>
+        </div>
+        <div class="ant-tabs">
+          <span class="tab is-active">全部</span><span class="tab">进行中</span><span class="tab">待验收</span><span class="tab">已完成</span>
+        </div>
+        <div class="ant-card-body" style="padding-top:0;">
+          <table class="ant-table">
+            <thead>
+              <tr><th>任务</th><th>状态</th><th>负责人</th><th>进度</th><th>更新时间</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>登录闭环</td>
+                <td><span class="ant-tag ant-tag-blue">进行中</span></td>
+                <td>张三</td>
+                <td><span class="ant-progress"><span class="ant-progress-track"><span class="ant-progress-fill" style="width:60%"></span></span><span class="ant-progress-text">60%</span></span></td>
+                <td class="ant-table-cell-num">2026-11-06 10:20</td>
+                <td><span class="ant-btn ant-btn-text">查看</span><span class="ant-btn ant-btn-danger">删除</span></td>
+              </tr>
+              <tr>
+                <td>权限校验</td>
+                <td><span class="ant-tag ant-tag-gold">待验收</span></td>
+                <td>李四</td>
+                <td><span class="ant-progress"><span class="ant-progress-track"><span class="ant-progress-fill" style="width:100%"></span></span><span class="ant-progress-text">100%</span></span></td>
+                <td class="ant-table-cell-num">2026-11-06 09:05</td>
+                <td><span class="ant-btn ant-btn-text">查看</span><span class="ant-btn ant-btn-text">验收</span></td>
+              </tr>
+              <tr>
+                <td>导出报表</td>
+                <td><span class="ant-tag ant-tag-green">已完成</span></td>
+                <td>王五</td>
+                <td><span class="ant-progress"><span class="ant-progress-track"><span class="ant-progress-fill" style="width:100%"></span></span><span class="ant-progress-text">100%</span></span></td>
+                <td class="ant-table-cell-num">2026-11-05 18:40</td>
+                <td><span class="ant-btn ant-btn-text">查看</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <!-- antd: Pagination -->
+          <div class="ant-pagination"><span class="item">‹</span><span class="item is-active">1</span><span class="item">2</span><span class="item">3</span><span class="item">›</span><span>共 24 条</span></div>
+        </div>
+      </section>
+
+      <!-- antd: Card + Descriptions（详情区） -->
+      <section class="ant-card">
+        <div class="ant-card-head"><h2>任务详情</h2><span class="ant-btn ant-btn-text">编辑</span></div>
+        <div class="ant-card-body">
+          <dl class="ant-descriptions">
+            <dt>任务名称</dt><dd>{{task}}</dd>
+            <dt>状态</dt><dd><span class="ant-tag ant-tag-blue">进行中</span></dd>
+            <dt>负责人</dt><dd>张三</dd>
+            <dt>关联契约</dt><dd><code>S-01</code>、<code>S-02</code></dd>
+            <dt>更新时间</dt><dd>{{todayIso}}</dd>
+          </dl>
+        </div>
+      </section>
+
+      <!-- antd: Card + Form（新建/编辑抽屉里的表单） -->
+      <section class="ant-card">
+        <div class="ant-card-head"><h2>新建任务（Modal / Drawer 内表单）</h2><span class="ant-btn">取消</span><span class="ant-btn ant-btn-primary">提交</span></div>
+        <div class="ant-card-body">
+          <div class="ant-form-item">
+            <label class="ant-form-item-label"><em>*</em>任务名称</label>
+            <div class="ant-form-item-control"><span class="ant-input">请输入任务名称</span></div>
+          </div>
+          <div class="ant-form-item">
+            <label class="ant-form-item-label"><em>*</em>所属契约</label>
+            <div class="ant-form-item-control"><span class="ant-select">S-01 用手机号+密码换取会话 <span>▾</span></span></div>
+          </div>
+          <div class="ant-form-item">
+            <label class="ant-form-item-label">负责人</label>
+            <div class="ant-form-item-control"><span class="ant-select">请选择负责人 <span>▾</span></span></div>
+          </div>
+          <div class="ant-form-item">
+            <label class="ant-form-item-label">优先级</label>
+            <div class="ant-form-item-control">
+              <span class="ant-radio"><i>◉</i> 高</span><span class="ant-radio"><i>○</i> 中</span><span class="ant-radio"><i>○</i> 低</span>
+            </div>
+          </div>
+          <div class="ant-form-item">
+            <label class="ant-form-item-label">通知</label>
+            <div class="ant-form-item-control"><span class="ant-switch"></span></div>
+          </div>
+          <div class="ant-form-item">
+            <label class="ant-form-item-label">说明</label>
+            <div class="ant-form-item-control"><span class="ant-input" style="height:72px;align-items:flex-start;">补充说明（可选）</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- antd: Alert（异常态示例） + Empty（空态示例） + Skeleton（加载态示例） -->
+      <section class="ant-card">
+        <div class="ant-card-head"><h2>状态与反馈</h2></div>
+        <div class="ant-card-body" style="display:grid;gap:16px;">
+          <div class="ant-alert ant-alert-warning"><strong>空态</strong><span>没有符合条件的数据时，用 antd Empty，不要留白屏。</span></div>
+          <div class="ant-empty">暂无数据</div>
+          <div class="ant-alert"><strong>加载态</strong><span>首屏用 Skeleton 占位，列表用 Spin，避免布局跳动。</span></div>
+          <div><div class="ant-skeleton" style="width:60%"></div><div class="ant-skeleton" style="width:40%;margin-top:8px;"></div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>

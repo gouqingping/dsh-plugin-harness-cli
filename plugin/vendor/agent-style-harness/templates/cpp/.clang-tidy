@@ -1,0 +1,62 @@
+# Google C++ Style 的静态检查子集 —— 候选清单，需 C++ owner 确认（ADR §13.4）
+#
+# 纪律：
+#   1. 全部为 warning 级，不阻断提交；
+#   2. 只收录在存量代码上误报率经过实测的规则；
+#   3. 新增规则必须先在目标仓库跑一遍全量，统计误报再决定是否加入。
+---
+Checks: >
+  -*,
+  bugprone-*,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-auto,
+  readability-braces-around-statements,
+  readability-const-return-type,
+  readability-container-size-empty,
+  readability-redundant-string-init,
+  readability-identifier-naming
+
+WarningsAsErrors: ''
+
+HeaderFilterRegex: '.*'
+
+# 让 clang-tidy 的修复输出与 .clang-format 保持一致
+FormatStyle: file
+
+# readability-identifier-naming：Google C++ 命名约定
+#   类型 CamelCase / 函数 CamelCase / 变量 snake_case /
+#   成员 snake_case + 尾下划线 / 常量 kCamelCase
+#
+# 已知误报：Google 允许与变量同名的存取器（size()、empty()），
+# 严格 FunctionCase=CamelCase 会命中它们。需要按项目配置 FunctionIgnoredRegexp。
+CheckOptions:
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+  - key: readability-identifier-naming.FunctionCase
+    value: CamelCase
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: _
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.ConstantPrefix
+    value: k
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantPrefix
+    value: k
+...

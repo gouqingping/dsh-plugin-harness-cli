@@ -1,0 +1,10 @@
+{
+  "name": "harness-style-vendor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "离线锁定的 commitlint 依赖（版本与 package-lock.json 一致，不用 ^ 让版本漂移）",
+  "dependencies": {
+    "@commitlint/cli": "19.8.1",
+    "@commitlint/config-conventional": "19.8.1"
+  }
+}

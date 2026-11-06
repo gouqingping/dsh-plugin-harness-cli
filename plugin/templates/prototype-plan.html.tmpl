@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN" data-plan-task="{{task}}" data-plan-status="待确认" data-confirmed-by="" data-confirmed-at="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{task}} · 方案确认</title>
+<style>
+  :root { --bg:#f5f5f5; --card:#fff; --line:#f0f0f0; --fg:rgba(0,0,0,.88); --dim:rgba(0,0,0,.65);
+          --faint:rgba(0,0,0,.45); --primary:#1677ff; --ok:#52c41a; --warn:#faad14; --bad:#ff4d4f; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--fg);
+         font:14px/1.5714 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 900px; margin: 0 auto; }
+  header, section { background:var(--card); border-radius:8px; box-shadow:0 1px 2px rgba(0,0,0,.03); padding:16px 24px; margin-bottom:16px; }
+  h1 { font-size:20px; margin:0 0 8px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  .meta { color:var(--dim); margin:0 0 4px; }
+  .meta b { color:var(--fg); font-weight:600; }
+  ul, ol { margin:0; padding-left:20px; }
+  li { margin:2px 0; }
+  code { background:rgba(0,0,0,.06); border-radius:4px; padding:0 4px; font-size:12px; }
+  a { color:var(--primary); text-decoration:none; }
+  .tag { display:inline-block; padding:0 8px; height:22px; line-height:20px; border-radius:4px;
+         border:1px solid #ffe58f; background:#fffbe6; color:#d48806; font-size:12px; }
+  .tag.is-ok { border-color:#b7eb8f; background:#f6ffed; color:#389e0d; }
+  .hint { color:var(--faint); font-size:13px; margin-top:6px; }
+  .gate { border-left:3px solid var(--warn); }
+  .gate.is-ok { border-left-color: var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>{{task}} · 方案确认</h1>
+    <p class="meta">用户原话：<b>{{userWords}}</b></p>
+    <p class="meta">
+      状态：<span class="tag" data-plan-status-label>待确认</span>
+      · 确认人：<b data-confirmed-by-label>—</b>
+      · 确认时间：<b data-confirmed-at-label>—</b>
+    </p>
+    <p class="hint">
+      本页由 <code>dsh-plugin-harness-cli plan {{task}}</code> 生成。**确认之前不要开工**：
+      step 进度大于 0 或任务状态不是「进行中」时，校验会要求本页状态为「已确认」。
+      确认命令：<code>dsh-plugin-harness-cli plan {{task}} --confirm --by "确认人"</code>。
+    </p>
+  </header>
+
+  <section id="goal" data-section="goal">
+    <h2>1. 需求原话与目标</h2>
+    <ul>
+      <li>原话：{{userWords}}</li>
+      <li>目标（一句话，完成时能验证）：待填</li>
+      <li>不做的事（非目标）：待填</li>
+    </ul>
+  </section>
+
+  <section id="approach" data-section="approach">
+    <h2>2. 方案（DDD 边界 / SDD 契约）</h2>
+    <ul>
+      <li>限界上下文：待填（与 <code>docs/specs/{{task}}/design.md</code> 一致）</li>
+      <li>核心方案：待填（分几步、每步产出什么）</li>
+      <li>契约：待填（<code>S-01</code>、<code>S-02</code>…），详见 <a href="../../{{paths.specs}}/{{task}}/spec.md">spec.md</a></li>
+    </ul>
+  </section>
+
+  <section id="ui" data-section="ui">
+    <h2>3. 页面设计（需要界面时先做这一节）</h2>
+    <ul>
+      <li>页面清单：待填（没有界面就写「本任务无界面」）</li>
+      <li>关键状态：待填（加载 / 空 / 错误 / 无权限 / 成功）</li>
+      <li>UI 稿：<a href="ui/index.html">ui/index.html</a>（未生成时先跑 <code>dsh-plugin-harness-cli ui {{task}}</code>）</li>
+    </ul>
+    <p class="hint">顺序固定：先页面设计，再流程交互；页面没定稿不要开始写交互。</p>
+  </section>
+
+  <section id="flow" data-section="flow">
+    <h2>4. 流程与交互设计</h2>
+    <ul>
+      <li>主流程：待填（谁在什么时候做什么，系统怎么响应）</li>
+      <li>异常路径：待填（失败 / 超时 / 并发冲突怎么走）</li>
+      <li>状态流转：待填（哪些状态可以互转，谁触发）</li>
+    </ul>
+  </section>
+
+  <section id="risks" data-section="risks">
+    <h2>5. 风险与边界</h2>
+    <ul>
+      <li>数据风险：待填</li>
+      <li>依赖与外部系统：待填</li>
+      <li>明确不做的：待填</li>
+    </ul>
+  </section>
+
+  <section id="accept" data-section="accept">
+    <h2>6. 验收标准</h2>
+    <ul>
+      <li>待填：可机械核对的验收条目，逐条对应 <code>S-xx</code></li>
+    </ul>
+  </section>
+
+  <section id="confirm" class="gate" data-section="confirm">
+    <h2>7. 确认</h2>
+    <ul>
+      <li>方案已与需求方确认</li>
+      <li>页面设计 / 流程设计已确认（如涉及界面）</li>
+      <li>风险与边界已确认</li>
+    </ul>
+    <p class="hint">
+      确认后执行：<code>dsh-plugin-harness-cli plan {{task}} --confirm --by "确认人"</code>，
+      再把任务页的状态改为「进行中」并开始推进进度。
+    </p>
+  </section>
+</main>
+</body>
+</html>

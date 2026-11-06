@@ -1,0 +1,28 @@
+# 进度日志
+
+> 读者是**下一个会话的 Agent**，不是领导。标准只有一条：读到的人能在 2 分钟内恢复现场。
+> 纪律：开工先读，收工必写；只在顶部追加，历史记录不删。
+
+## {{today}}（会话 1）
+### 本次目标
+初始化 Harness 骨架（{{paths.agents}} / {{paths.init}} / {{paths.featureList}} / {{paths.progress}}），确认四件套互相可达。
+
+### 已完成
+- 由 `dsh-plugin-harness-cli init` 生成配置与骨架文件
+- 入口文件指向：环境 → `{{paths.init}}`，范围 → `{{paths.featureList}}`，状态 → 本文件
+
+### 验证结果
+- `{{commands.gate}}` 待跑（首次运行前需先有 lint / 测试命令）
+
+### 遇到的问题
+- 待补：`project.positioning` 仍是占位内容，Agent 读不出项目是做什么的
+
+### 下一步行动
+1. 补全 `harness-cli.json` 的 `project.positioning` 与 `dirs`，重跑 `dsh-plugin-harness-cli agents`
+2. 在 `{{paths.featureList}}` 里盘出至少 6 个 feature，每个给 2 条以上 `acceptance`
+3. 跑 `{{commands.gate}}`，把结果写回「验证结果」
+
+### 相关文件
+- `{{paths.agents}}`
+- `{{paths.featureList}}`
+- `{{paths.init}}`

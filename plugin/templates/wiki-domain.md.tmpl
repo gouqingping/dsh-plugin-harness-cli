@@ -1,0 +1,32 @@
+> 业务域下钻页：`{{domain.path}}`。由生成器从项目声明的目录与功能清单汇总。
+
+## 1. 职责
+
+{{#if domain.desc}}{{domain.desc}}{{/if}}
+{{#unless domain.desc}}（未在配置里声明职责；按目录内容推断）{{/unless}}
+
+## 2. 功能清单（全量，供对照）
+
+> 功能清单目前没有「所属目录」字段，本页不做自动归属，避免把别的域的功能算进来。
+> 需要按域统计时，请在人工补充区列出本域条目，或给功能清单补一个归属字段。
+
+{{#if features}}
+| 编号 | 名称 | 状态 |
+|---|---|---|
+{{#each features}}| `{{id}}` | {{name}} | {{statusText}} |
+{{/each}}
+{{/if}}
+{{#unless features}}还没有功能条目：跑 `plan <任务名>` 建任务后会自动列出。{{/unless}}
+
+## 3. 检查与验证
+
+| 项目 | 内容 |
+|---|---|
+| 测试命令 | {{#if commands.test}}`{{commands.test}}`{{/if}}{{#unless commands.test}}（未定义）{{/unless}} |
+| Lint | {{#if commands.lint}}`{{commands.lint}}`{{/if}}{{#unless commands.lint}}（未定义）{{/unless}} |
+| 门禁 | {{#if commands.gate}}`{{commands.gate}}`{{/if}}{{#unless commands.gate}}（未定义）{{/unless}} |
+
+## 4. 边界提醒
+
+- 本域只统计属于本域的条目；跨域复用请在功能清单里链接到所属域，不重复计数。
+- 改本域文件前先看是否有认领（并行时），避免与他人范围重叠。

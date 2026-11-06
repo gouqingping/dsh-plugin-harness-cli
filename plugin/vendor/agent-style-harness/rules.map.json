@@ -1,0 +1,38 @@
+{
+  "yapf/format": {
+    "doc": "https://google.github.io/styleguide/pyguide.html#s3.2",
+    "level": "error"
+  },
+  "isort/import-order": {
+    "doc": "https://google.github.io/styleguide/pyguide.html#s3.13",
+    "level": "error"
+  },
+  "gts/format": {
+    "doc": "https://google.github.io/styleguide/tsguide.html",
+    "level": "error"
+  },
+  "gts/@typescript-eslint/no-explicit-any": {
+    "doc": "https://google.github.io/styleguide/tsguide.html#any-type",
+    "level": "warning"
+  },
+  "google-java-format/format": {
+    "doc": "https://google.github.io/styleguide/javaguide.html#s4-formatting",
+    "level": "error"
+  },
+  "clang-format/format": {
+    "doc": "https://google.github.io/styleguide/cppguide.html#Formatting",
+    "level": "error"
+  },
+  "shfmt/format": {
+    "doc": "https://google.github.io/styleguide/shellguide.html",
+    "level": "warning"
+  },
+  "shellcheck/SC2086": {
+    "doc": "https://google.github.io/styleguide/shellguide.html#quoting",
+    "level": "warning"
+  },
+  "gofmt/format": {
+    "doc": "https://go.dev/doc/effective_go#formatting",
+    "level": "error"
+  }
+}

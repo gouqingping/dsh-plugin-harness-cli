@@ -1,0 +1,460 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * claim.js —— 并行 loop 的认领与写冲突检查（由 dsh-plugin-harness-cli 生成，零依赖）
+ *
+ * 为什么要有它：多个会话 / 多个 Agent 可以同时推进这个仓库，但"谁在做哪个任务、
+ * 会改哪些文件"必须写在仓库里，而不是记在某个会话的上下文里。约定只有三条：
+ *
+ *   1. 开工先认领：`claim.js add <F-xxx> --owner <会话/Agent 标识> --scope <路径>`
+ *   2. 只改自己 scope 内的文件；跨 scope 先 release 再重新认领
+ *   3. 收工必释放：`claim.js release <F-xxx>`（另有 heartbeat / prune 兜住死循环）
+ *
+ * 认领文件：`docs/claims/<F-xxx>.json`（路径来自 harness-cli.json 的 paths.claims）。
+ * 认领是"独占创建"（O_EXCL）：两个会话同时 claim 同一个任务，只有一个能成功。
+ * 本脚本不改 `docs/feature_list.json` —— 状态推进仍要显式改文件，见 AGENTS.md §5.1。
+ *
+ * 子命令：
+ *   add <id> --owner <name> [--scope <路径>]... [--loop <n>] [--note <文本>] [--force]
+ *   release <id> [--owner <name>] [--force]
+ *   heartbeat <id> --owner <name>
+ *   list [--json]
+ *   verify [--json]
+ *   prune [--ttl <小时>] [--force] [--dry-run]
+ *
+ * 退出码：0 通过（含仅警告）/ 1 有违规 / 2 脚本自身无法运行
+ */
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.resolve(argOf('root', '.') || '.');
+const AS_JSON = process.argv.includes('--json');
+
+/** 命名行参数：`--key value` 或 `--key=value`；无值时为 true。 */
+function argOf(name, fallback) {
+  const eq = process.argv.find((token) => token.startsWith(`--${name}=`));
+  if (eq !== undefined) return eq.slice(name.length + 3);
+  const i = process.argv.indexOf(`--${name}`);
+  if (i === -1) return fallback;
+  const value = process.argv[i + 1];
+  return value === undefined || value.startsWith('--') ? true : value;
+}
+
+/** 可重复参数：`--scope a --scope b`。 */
+function allOf(name) {
+  const out = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    const token = process.argv[i];
+    if (token === `--${name}`) {
+      const value = process.argv[i + 1];
+      if (value !== undefined && !value.startsWith('--')) out.push(value);
+    } else if (token.startsWith(`--${name}=`)) {
+      out.push(token.slice(name.length + 3));
+    }
+  }
+  return out;
+}
+
+/** 位置参数：跳过所有 flag 及其取值，只留子命令与任务 id。 */
+function positionals() {
+  const valueFlags = new Set(['root', 'owner', 'scope', 'loop', 'note', 'ttl']);
+  const out = [];
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token.startsWith('--')) {
+      const name = token.replace(/^--/, '').split('=')[0];
+      if (valueFlags.has(name) && !token.includes('=')) i++;
+      continue;
+    }
+    out.push(token);
+  }
+  return out;
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    return null;
+  }
+}
+
+/** 与工具、prototype-check 保持一致：新文件名优先，其次旧文件名。 */
+function loadConfig() {
+  for (const name of ['harness-cli.json', 'harness-pro.json', 'common-agent.json']) {
+    const data = readJson(path.join(ROOT, name));
+    if (data !== null) return data;
+  }
+  return {};
+}
+
+const CONF = loadConfig();
+const PATHS = CONF.paths || {};
+const CLAIMS = CONF.claims || {};
+const FEATURE_LIST = String(PATHS.featureList || 'docs/feature_list.json');
+const TASK_QUEUE = String(PATHS.taskQueue || 'task_queue.json');
+const CLAIM_DIR = String(PATHS.claims || 'docs/claims');
+const ENABLED = CLAIMS.enabled !== false;
+const TTL_HOURS = Number(CLAIMS.ttlHours) > 0 ? Number(CLAIMS.ttlHours) : 12;
+const HOUR = 60 * 60 * 1000;
+
+const results = [];
+const add = (id, level, message) => results.push({id, level, message});
+
+function features() {
+  const data = readJson(path.join(ROOT, FEATURE_LIST));
+  if (data === null) return null;
+  return Array.isArray(data.features) ? data.features : [];
+}
+
+function wipLimit() {
+  const data = readJson(path.join(ROOT, TASK_QUEUE));
+  const limit = data && Number.isInteger(data.wipLimit) ? data.wipLimit : 1;
+  return limit >= 1 ? limit : 1;
+}
+
+function claimDir() {
+  return path.join(ROOT, CLAIM_DIR);
+}
+
+function claimPath(id) {
+  return path.join(claimDir(), `${id}.json`);
+}
+
+/** 读全部认领；返回 {claims, broken}。broken 是读不动的文件名。 */
+function activeClaims() {
+  let entries;
+  try {
+    entries = fs.readdirSync(claimDir());
+  } catch (err) {
+    return {claims: [], broken: []};
+  }
+  const claims = [];
+  const broken = [];
+  for (const name of entries.filter((f) => f.endsWith('.json')).sort()) {
+    const data = readJson(path.join(claimDir(), name));
+    const id = name.replace(/\.json$/, '');
+    if (data === null || typeof data !== 'object') {
+      broken.push(id);
+      continue;
+    }
+    claims.push({...data, feature: data.feature || id, file: name});
+  }
+  return {claims, broken};
+}
+
+function normalizeScope(value) {
+  let scope = String(value).trim().replace(/\\/g, '/');
+  while (scope.startsWith('./')) scope = scope.slice(2);
+  return scope.replace(/\/+$/, '');
+}
+
+/** 两个 scope 是否重叠：相等，或一个是另一个的路径前缀。 */
+function overlaps(a, b) {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+function ageHours(iso) {
+  const time = Date.parse(String(iso || ''));
+  if (!Number.isFinite(time)) return Infinity;
+  return (Date.now() - time) / HOUR;
+}
+
+function isoNow() {
+  return new Date().toISOString();
+}
+
+/** 拒绝并退出 1（用于 add / release 这类写操作）。 */
+function refuse(message) {
+  process.stderr.write(`❌ ${message}\n`);
+  process.exitCode = 1;
+}
+
+function owner() {
+  const explicit = argOf('owner', undefined);
+  if (explicit !== undefined && explicit !== true) return String(explicit).trim();
+  return (process.env.CLAIM_OWNER || '').trim();
+}
+
+function describeClaim(claim) {
+  const scopes = Array.isArray(claim.scope) && claim.scope.length ? claim.scope.join(', ') : '(未声明 scope)';
+  return `${claim.feature} 由 ${claim.owner} 认领（scope: ${scopes}，心跳 ${claim.heartbeatAt || claim.startedAt || '未知'}）`;
+}
+
+function cmdAdd(id) {
+  if (!/^F-\d{3,}$/.test(String(id || ''))) return refuse(`任务 id 形如 F-001，收到：${id}`);
+  const me = owner();
+  if (!me) return refuse('缺少 --owner：写清是哪个会话 / Agent 在认领（也可设环境变量 CLAIM_OWNER）');
+
+  const list = features();
+  if (list === null) return refuse(`读不到 ${FEATURE_LIST}：先跑 init 生成功能清单`);
+  const feature = list.find((f) => f && f.id === id);
+  if (!feature) return refuse(`${id} 不在 ${FEATURE_LIST} 里：先把它写进清单再认领`);
+  if (feature.status === 'done') return refuse(`${id} 已经是 done，不需要认领`);
+  if (feature.status === 'blocked') return refuse(`${id} 处于 blocked，先解阻塞再认领`);
+
+  const {claims} = activeClaims();
+  const existing = claims.find((c) => c.feature === id);
+  if (existing && !process.argv.includes('--force')) {
+    return refuse(`${id} 已被认领：${describeClaim(existing)}（要抢占先 release，或加 --force 明确覆盖）`);
+  }
+
+  const scopes = allOf('scope').map(normalizeScope).filter((s) => s.length > 0);
+  const others = claims.filter((c) => c.feature !== id);
+  const limit = wipLimit();
+  if (others.length >= limit) {
+    return refuse(`并行上限 ${limit}（${TASK_QUEUE} 的 wipLimit），当前已认领：${others.map((c) => c.feature).join(', ')}；先 release 一个`);
+  }
+  for (const other of others) {
+    for (const mine of scopes) {
+      for (const their of Array.isArray(other.scope) ? other.scope : []) {
+        if (overlaps(normalizeScope(mine), normalizeScope(their))) {
+          return refuse(`scope 冲突：${mine} 与 ${other.feature} 的 ${their} 重叠；换一个范围或等对方 release`);
+        }
+      }
+    }
+  }
+
+  const loop = Number(argOf('loop', 1));
+  const record = {
+    feature: id,
+    owner: me,
+    loop: Number.isInteger(loop) && loop > 0 ? loop : 1,
+    scope: scopes,
+    status: 'active',
+    startedAt: isoNow(),
+    heartbeatAt: isoNow(),
+    ...(argOf('note', undefined) !== undefined ? {note: String(argOf('note'))} : {}),
+  };
+
+  fs.mkdirSync(claimDir(), {recursive: true});
+  try {
+    // 独占创建：两个会话同时 add 同一个 feature，只有一个能拿到。
+    fs.writeFileSync(claimPath(id), `${JSON.stringify(record, null, 2)}\n`, {flag: 'wx'});
+  } catch (err) {
+    if (err && err.code === 'EEXIST') {
+      if (!process.argv.includes('--force')) return refuse(`${id} 刚被另一个会话抢到（并发认领失败），换一个任务`);
+      fs.writeFileSync(claimPath(id), `${JSON.stringify(record, null, 2)}\n`);
+    } else {
+      throw err;
+    }
+  }
+
+  process.stdout.write(`✅ 已认领 ${id}（${me}）\n`);
+  process.stdout.write(`   认领文件：${CLAIM_DIR}/${id}.json\n`);
+  process.stdout.write(`   scope：${scopes.length ? scopes.join(', ') : '未声明（verify 会给警告）'}\n`);
+  process.stdout.write('   下一步：把该 feature 的状态改成 in_progress，然后开工\n');
+}
+
+function cmdRelease(id) {
+  const file = claimPath(id);
+  if (!fs.existsSync(file)) return refuse(`${id} 没有认领，无需释放`);
+  const data = readJson(file) || {};
+  const me = owner();
+  if (me && data.owner && me !== data.owner && !process.argv.includes('--force')) {
+    return refuse(`${id} 由 ${data.owner} 认领；释放别人的认领要加 --force`);
+  }
+  fs.rmSync(file, {force: true});
+  process.stdout.write(`✅ 已释放 ${id}${data.owner ? `（原认领者 ${data.owner}）` : ''}\n`);
+  process.stdout.write('   收工前记得：feature_list 状态推进 + 进度日志「下一步行动」\n');
+}
+
+function cmdHeartbeat(id) {
+  const file = claimPath(id);
+  if (!fs.existsSync(file)) return refuse(`${id} 没有认领，先 add`);
+  const data = readJson(file) || {};
+  const me = owner();
+  if (me && data.owner && me !== data.owner) return refuse(`${id} 属于 ${data.owner}，不能代它心跳`);
+  data.heartbeatAt = isoNow();
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+  process.stdout.write(`✅ ${id} 心跳已更新：${data.heartbeatAt}\n`);
+}
+
+function cmdList() {
+  const {claims, broken} = activeClaims();
+  if (AS_JSON) {
+    process.stdout.write(`${JSON.stringify({claims, broken}, null, 2)}\n`);
+    return;
+  }
+  if (claims.length === 0) {
+    process.stdout.write('（没有任何认领）\n');
+    return;
+  }
+  process.stdout.write(`并行上限 ${wipLimit()}，当前认领 ${claims.length} 个：\n`);
+  for (const claim of claims) {
+    const age = ageHours(claim.heartbeatAt || claim.startedAt);
+    const stale = age > TTL_HOURS ? `  ⚠ 心跳 ${age.toFixed(1)}h 前（超过 TTL ${TTL_HOURS}h）` : '';
+    process.stdout.write(`  ${describeClaim(claim)}${stale}\n`);
+  }
+  for (const id of broken) process.stdout.write(`  ! ${CLAIM_DIR}/${id}.json 读不动\n`);
+}
+
+function cmdVerify() {
+  if (!ENABLED) {
+    if (AS_JSON) process.stdout.write(`${JSON.stringify({skipped: true, checks: []}, null, 2)}\n`);
+    else process.stdout.write('！claims.enabled = false，跳过认领检查\n');
+    return;
+  }
+
+  const list = features();
+  if (list === null) {
+    add('C200', 'error', `读不到 ${FEATURE_LIST}：先跑 init 生成功能清单`);
+    return;
+  }
+  const byId = new Map(list.filter((f) => f && f.id).map((f) => [f.id, f]));
+  const {claims, broken} = activeClaims();
+  const limit = wipLimit();
+
+  for (const id of broken) add('C206', 'error', `${CLAIM_DIR}/${id}.json 不是合法 JSON：认领丢了，谁在做这个任务没人知道`);
+
+  // C205 并行上限：认领数也不能超过 wipLimit（否则并行预算形同虚设）
+  if (claims.length > limit) {
+    add('C205', 'error', `当前 ${claims.length} 个认领，超过 ${TASK_QUEUE} 的 wipLimit = ${limit}`);
+  } else {
+    add('C205', 'pass', `认领数 ${claims.length} ≤ 并行上限 ${limit}`);
+  }
+
+  // C201 每个 in_progress 都要有认领
+  const missing = list.filter((f) => f && f.id && f.status === 'in_progress' && !claims.some((c) => c.feature === f.id));
+  if (missing.length > 0) {
+    add(
+      'C201',
+      'error',
+      `${missing.length} 个 in_progress 没有认领：${missing.slice(0, 5).map((f) => f.id).join(', ')}` +
+        (missing.length > 5 ? ' …' : '') +
+        `；先跑 node ${String(PATHS.claimScript || 'scripts/claim.js')} add <id> --owner <标识>`
+    );
+  } else {
+    add('C201', 'pass', `in_progress 全部有认领（${list.filter((f) => f && f.status === 'in_progress').length} 个）`);
+  }
+
+  // C202 认领必须指向真实且未结束的任务
+  for (const claim of claims) {
+    const feature = byId.get(claim.feature);
+    if (!feature) {
+      add('C202', 'error', `${claim.feature} 有认领但不在 ${FEATURE_LIST} 里：认领悬空了，release 掉`);
+    } else if (feature.status === 'done') {
+      add('C202', 'error', `${claim.feature} 已经是 done 但还留着认领：收工没 release`);
+    } else if (feature.status === 'blocked') {
+      add('C202', 'error', `${claim.feature} 是 blocked 却还占着认领：解阻或释放`);
+    }
+  }
+
+  // C203 写冲突：两个认领的 scope 不能重叠
+  for (let i = 0; i < claims.length; i++) {
+    for (let j = i + 1; j < claims.length; j++) {
+      const left = claims[i];
+      const right = claims[j];
+      for (const a of Array.isArray(left.scope) ? left.scope : []) {
+        for (const b of Array.isArray(right.scope) ? right.scope : []) {
+          if (overlaps(normalizeScope(a), normalizeScope(b))) {
+            add('C203', 'error', `写冲突：${left.feature} 的 ${a} 与 ${right.feature} 的 ${b} 重叠；串行或拆小范围`);
+          }
+        }
+      }
+    }
+  }
+
+  // C204 陈旧认领 / C207 缺 scope
+  for (const claim of claims) {
+    if (!Array.isArray(claim.scope) || claim.scope.length === 0) {
+      add('C207', 'warn', `${claim.feature} 没声明 scope：无法判断写冲突，建议 add 时写 --scope`);
+    }
+    const age = ageHours(claim.heartbeatAt || claim.startedAt);
+    if (age > TTL_HOURS) {
+      add(
+        'C204',
+        'warn',
+        `${claim.feature} 的认领已 ${age.toFixed(1)}h 没有心跳（TTL ${TTL_HOURS}h）：可能是死掉的 loop，确认后 prune`
+      );
+    }
+    if (!claim.owner || String(claim.owner).trim() === '') {
+      add('C206', 'error', `${claim.feature} 的认领没有 owner：出问题找不到人`);
+    }
+    if (!Number.isFinite(Date.parse(String(claim.startedAt || '')))) {
+      add('C206', 'error', `${claim.feature} 的认领缺少合法 startedAt`);
+    }
+  }
+
+  if (results.length === 0) add('C210', 'pass', '认领状态与并行上限一致');
+}
+
+function cmdPrune() {
+  const ttl = Number(argOf('ttl', TTL_HOURS)) || TTL_HOURS;
+  const dryRun = process.argv.includes('--dry-run');
+  const force = process.argv.includes('--force');
+  const list = features() || [];
+  const byId = new Map(list.filter((f) => f && f.id).map((f) => [f.id, f]));
+  const {claims} = activeClaims();
+  let removed = 0;
+  for (const claim of claims) {
+    const age = ageHours(claim.heartbeatAt || claim.startedAt);
+    const feature = byId.get(claim.feature);
+    const finished = !feature || feature.status === 'done' || feature.status === 'blocked';
+    const stale = age > ttl;
+    // 默认只清「任务已结束」或「心跳超过 TTL」的认领；心跳新鲜的在跑认领要 --force 才动
+    if (!finished && !stale && !force) continue;
+    if (!dryRun) fs.rmSync(claimPath(claim.feature), {force: true});
+    removed++;
+    process.stdout.write(`  ${dryRun ? '将删除' : '已删除'} ${claim.feature}（${claim.owner}，心跳 ${age.toFixed(1)}h 前）\n`);
+  }
+  process.stdout.write(`${dryRun ? '将清理' : '已清理'} ${removed} 个认领\n`);
+}
+
+function main() {
+  const [command, ...rest] = positionals();
+  const id = rest[0];
+  switch (command) {
+    case 'add':
+      return cmdAdd(id);
+    case 'release':
+      return cmdRelease(id);
+    case 'heartbeat':
+      return cmdHeartbeat(id);
+    case 'list':
+      return cmdList();
+    case 'verify':
+      return cmdVerify();
+    case 'prune':
+      return cmdPrune();
+    case undefined:
+    case 'help':
+      process.stdout.write(
+        '用法：\n' +
+          '  claim.js add <F-001> --owner <会话标识> [--scope <路径>]... [--loop <n>] [--force]\n' +
+          '  claim.js release <F-001> [--owner <会话标识>] [--force]\n' +
+          '  claim.js heartbeat <F-001> --owner <会话标识>\n' +
+          '  claim.js list [--json]\n' +
+          '  claim.js verify [--json]\n' +
+          '  claim.js prune [--ttl <小时>] [--force] [--dry-run]\n'
+      );
+      return;
+    default:
+      return refuse(`未知子命令：${command}（add / release / heartbeat / list / verify / prune）`);
+  }
+}
+
+try {
+  main();
+} catch (err) {
+  process.stderr.write(`claim 内部错误：${err && err.stack ? err.stack : err}\n`);
+  process.exitCode = 2;
+}
+
+if (AS_JSON && results.length > 0) {
+  process.stdout.write(`${JSON.stringify({checks: results}, null, 2)}\n`);
+} else if (results.length > 0) {
+  for (const r of results) {
+    if (r.level === 'pass') continue;
+    process.stdout.write(`  ${r.level === 'error' ? '✗' : '!'} [${r.id}] ${r.message}\n`);
+  }
+  const errors = results.filter((r) => r.level === 'error').length;
+  process.stdout.write(`${errors === 0 ? '✅ 认领检查通过' : `❌ ${errors} 项认领违规`}\n`);
+}
+
+if (process.exitCode === undefined) {
+  process.exitCode = results.some((r) => r.level === 'error') ? 1 : 0;
+}

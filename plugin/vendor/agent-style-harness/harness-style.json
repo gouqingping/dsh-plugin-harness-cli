@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "profile": "google",
+  "languages": {
+    "python": {
+      "enabled": true,
+      "engine": "yapf",
+      "severity": "error",
+      "importSorting": true
+    },
+    "typescript": {
+      "enabled": false,
+      "engine": "gts",
+      "severity": "error"
+    },
+    "java": {
+      "enabled": false,
+      "engine": "google-java-format",
+      "severity": "error"
+    },
+    "cpp": {
+      "enabled": false,
+      "engine": "clang-format",
+      "severity": "error",
+      "clangTidy": false
+    },
+    "shell": {
+      "enabled": false,
+      "engine": "shfmt",
+      "severity": "warning",
+      "shellcheck": true
+    },
+    "go": {
+      "enabled": false,
+      "engine": "gofmt",
+      "severity": "error"
+    }
+  },
+  "commitlint": {
+    "extends": [
+      "@commitlint/config-conventional"
+    ],
+    "scopes": [
+      "cli",
+      "hooks",
+      "engines",
+      "config",
+      "docs",
+      "vendor",
+      "ci",
+      "deps",
+      "templates"
+    ]
+  },
+  "exclude": [
+    "**/vendor/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/*.min.js",
+    "**/.scratch/**"
+  ]
+}

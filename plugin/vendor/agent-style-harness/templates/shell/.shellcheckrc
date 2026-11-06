@@ -1,0 +1,11 @@
+# shellcheck 配置。
+#
+# 分工：
+#   shfmt    负责格式（缩进 2、case 缩进），参数由 harness-style 的
+#            shell 适配器固定为 `-i 2 -ci`，shfmt 本身无配置文件；
+#   shellcheck 负责语义（未加引号的变量、无用命令等），读本文件。
+#
+# Google Shell Style 有明确要求（必须加引号、用 $(...) 而非反引号），
+# 但 shellcheck 不是官方实现，因此这条链路整体定为 warning，不阻断。
+shell=bash
+severity=warning

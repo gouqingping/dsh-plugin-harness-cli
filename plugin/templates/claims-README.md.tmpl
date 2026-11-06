@@ -1,0 +1,60 @@
+# claims/ —— 并行 loop 的认领台
+
+> 生成物：约定要改就改 `dsh-plugin-harness-cli` 的模板，不要手改本文件。
+
+多个会话 / 多个 Agent 可以同时推进这个仓库，但**谁在做哪个任务、会改哪些文件**必须写在仓库里，
+不能只记在某个会话的上下文里。这里每个 `F-xxx.json` 就是一份认领。
+
+## 协议
+
+1. **开工先认领**：`node {{claimScript}} add F-003 --owner <会话/Agent 标识> --scope <路径>`
+2. **只改 scope 内的文件**；要动别人 scope 里的东西，先 `release`，再拆小范围重新认领
+3. **长任务打心跳**：`node {{claimScript}} heartbeat F-003 --owner <标识>`，超过 {{claimsTtl}} 小时没心跳会报警
+4. **收工必释放**：`node {{claimScript}} release F-003`，同时推进 `{{featureList}}` 状态、更新进度日志
+5. 并行度上限来自 `{{taskQueue}}` 的 `wipLimit`（默认 1）；认出上限会直接拒绝
+
+认领是**独占创建**：两个会话同时 `add` 同一个任务，只有一个能成功；另一个应当去领别的任务。
+
+## 常用命令
+
+| 目的 | 命令 |
+|---|---|
+| 认领 | `node {{claimScript}} add F-003 --owner <标识> --scope {{docs}}/ --scope {{prototypeDir}}/f-003/` |
+| 看一眼谁在做什么 | `node {{claimScript}} list` |
+| 续心跳 | `node {{claimScript}} heartbeat F-003 --owner <标识>` |
+| 释放 | `node {{claimScript}} release F-003` |
+| 自检（`check` 也会跑） | `node {{claimScript}} verify` |
+| 清理死掉的认领 | `node {{claimScript}} prune --ttl {{claimsTtl}}` |
+
+## 判定（`check` 的 C2xx）
+
+| id | 内容 | 级别 |
+|---|---|---|
+| C201 | 每个 `in_progress` 的 feature 必须有认领 | error |
+| C202 | 认领必须指向存在、且未结束的 feature | error |
+| C203 | 两份认领的 `scope` 不能重叠（同路径或前缀关系） | error |
+| C204 | 心跳超过 `claims.ttlHours` 没有更新 | warn |
+| C205 | 认领数不得超过 `wipLimit` | error |
+| C206 | 认领缺 `owner` / `startedAt`，或 JSON 读不动 | error |
+| C207 | 认领没声明 `scope`，无法判断写冲突 | warn |
+
+## 认领文件长什么样
+
+```json
+{
+  "feature": "F-003",
+  "owner": "session-620d4845 / agent-main",
+  "loop": 1,
+  "scope": ["src/auth", "docs/"],
+  "status": "active",
+  "startedAt": "2026-11-06T03:20:00.000Z",
+  "heartbeatAt": "2026-11-06T03:41:00.000Z"
+}
+```
+
+`loop` 是这个 owner 的第几轮 loop（同一任务多轮迭代时自增），便于回看"这轮跑到哪儿了"。
+
+## 关闭这套约定
+
+`{{configFile}}` 里 `claims.enabled = false` 即可：生成物保留，C2xx 判定与 `check` 的调用都跳过，
+单 WIP（`wipLimit = 1`）仍然有效。

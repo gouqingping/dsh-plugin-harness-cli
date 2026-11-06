@@ -1,0 +1,162 @@
+# `{{prototypeDir}}/` 任务页约定：DDD → SDD → TDD → 计划 → 记录
+
+> 一个任务一个页面，页面按固定五段写。**拆分顺序不许颠倒**：先划领域边界，再把需求写成契约，
+> 再让测试把行为锁死，最后才排计划与推进度。
+> 由 `dsh-plugin-harness-cli init` 生成；改约定请改 `harness-cli.json` 的 `presets.prototype` 后重新生成。
+
+## 一句话规则
+
+**任务一开始就建 `{{prototypeDir}}/{任务名}/{{prototypePage}}`，按 DDD / SDD / TDD 五段填满；
+之后每次进度变化都回来更新页面与总览页。**
+
+## 先确认方案：`<任务>/plan.html`
+
+任务一发起就生成方案页，**确认之前不许开工**：
+
+| 章节 | 写什么 |
+|---|---|
+| 1 目标 | 用户原话、一句话目标、非目标 |
+| 2 方案 | 限界上下文、核心方案、契约（`S-xx`） |
+| 3 页面设计 | 有界面时先写这节：页面清单、关键状态、UI 稿链接（`ui/index.html`） |
+| 4 流程与交互 | 主流程、异常路径、状态流转 |
+| 5 风险与边界 | 数据风险、依赖、明确不做的 |
+| 6 验收 | 可机械核对的条目 |
+| 7 确认 | 确认清单 + 确认人/时间 |
+
+```sh
+dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
+```
+
+**门禁 P21**：所有任务都必须有 `plan.html` 且七节齐全；只要有进度（步骤 > 0）或状态不是「进行中」，
+方案就必须是「已确认」，否则判失败。
+
+## 文档先定稿：`docs/specs/<任务>/` → 复盘 → 确认
+
+1. `dsh-plugin-harness-cli plan <任务>` 会把 `proposal.md` / `spec.md` / `design.md` / `tasks.md` 一次补全，并同步任务页的契约、用例与步骤（**人可以直接改**，再跑 plan 不会覆盖已填内容）；
+2. 跑 `dsh-plugin-harness-cli review <任务>`：Agent 复盘，核对文档与任务页是否一致，写
+   `docs/specs/<任务>/review.md`（含四份文档的指纹）；
+3. 跑 `dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"`：人最终确认；
+4. 之后才能用 `progress` 推进度。
+
+**门禁 P22**：确认之后 `docs/specs/<任务>/*.md` 一旦被改，指纹就对不上——确认失效，`progress` 拒绝，
+校验也会失败；必须重新 `review` + `--confirm`。这是「边改需求边跑」的机械拦截。
+
+## 进度只有一个写入口
+
+进度不要手改页面：用 `dsh-plugin-harness-cli progress <任务> --step N --pct 0..100 [--status …] [--note …]`。
+每次调用都会：改步骤百分比 → 追加一条带时间的进度记录 → 重算总进度 → 同步总览页。
+方案未确认时它拒绝写入，保证「先确认再开始」。
+
+## 页面五段（机器可判定）
+
+| 段 | 内容 | 关键标记 |
+|---|---|---|
+| 1 领域（DDD） | 限界上下文、统一语言 ≥3 条、聚合 / 实体、不变量 | `data-context`、`data-language`、`data-aggregates`、`data-invariants` |
+| 2 契约（SDD） | 每条行为：输入 → 输出 + 错误语义 + 验收标准，≥2 条 | `<tr data-spec="S-01">` 六列 |
+| 3 测试（TDD） | 每条用例挂在契约上，先红后绿；每条契约至少一条用例 | `<li class="case" data-case data-spec data-tdd>` |
+| 4 任务规划 | 步骤编号 1..N 连续，每步绑定契约 | `<li class="step" data-step data-spec>` + `.step-pct[data-pct]` |
+| 5 进度记录 | 每次变化追加一条，最后一条的总进度 = 当前汇总 | `<li data-at data-total>` |
+
+### DDD：先把边界画出来
+
+- **限界上下文**：这个任务属于哪个边界；边界外的概念不在本页出现。
+- **统一语言**：术语 + 一句话定义，至少 3 条，写进 `data-language` 的 `dt`/`dd`。
+- **聚合 / 实体**：改动落在哪个聚合根上，它守什么；`data-aggregates` 至少 1 条。
+- **不变量**：任何时刻都必须成立的一句话（什么条件下一定不成立），`data-invariants` 至少 1 条。
+
+### SDD：把需求写成 AI 能执行的契约
+
+一条契约六格，缺一格都不算契约：
+
+| 编号 | 契约（做什么） | 输入 | 输出 | 错误语义 | 验收标准 |
+|---|---|---|---|---|---|
+| `S-01` | 一句话行为规格 | 输入 / 前置状态 | 输出 / 后置状态 | 什么情况报什么错 | 怎么算成立（可执行） |
+
+- 编号 `S-01` 起、两位以上数字，页内唯一；计划与用例都引用它。
+- 没有错误语义的契约不是契约：校验失败 / 边界值 / 并发冲突至少写一条。
+
+### TDD：测试先于实现
+
+- 每条用例 `data-case="T-01"`（唯一）、`data-spec` 指向契约、`data-tdd="red|green"`。
+- **先写 red**，实现到 green 才允许改；任务标「完成」时不允许还有 red。
+- 每条契约至少一条用例；用例正文写清跑什么命令、断言什么。
+
+### 任务规划：编号连续、可人工调整
+
+- `<li class="step" data-step="1" data-spec="S-01">`，`data-step` 从 1 连续，增删后重排。
+- 每步只有一个 `.step-pct[data-pct="0..100"]`；总进度 = 各步等权汇总，页面脚本自动回写，不手填。
+
+### 进度记录：每次变化都要留痕
+
+- 追加 `<li data-at="2026-11-06T10:20:00+08:00" data-total="40">…</li>`，只加不删。
+- 最后一条的 `data-total` 必须等于当前汇总；否则判失败（P9）。
+
+## UI 设计稿：`{{prototypeDir}}/<任务>/ui/`
+
+需要界面时跑 `dsh-plugin-harness-cli ui <任务名>`，生成：
+
+| 文件 | 内容 |
+|---|---|
+| `ui/index.html` | 离线静态设计稿：antd v5 设计令牌（`--ant-*`）、Layout + Sider、页头、指标卡、表格（Tag / Progress / Pagination）、详情、表单、空 / 加载 / 错误态 |
+| `ui/README.md` | 设计说明：页面目标、信息架构、组件清单、状态、契约对应、响应式与可访问性 |
+
+硬规则（P20 判定）：
+
+1. `<html data-design-system="antd">` 且 `:root` 里必须有 `--ant-color-primary` 等设计令牌；
+2. 至少用到 4 个 antd 组件（Button / Table / Form / Tag / Progress / Modal / Pagination…）；
+3. 不允许混入第二套设计体系（Bootstrap / Tailwind / Element Plus / Vant）；
+4. `ui/README.md` 必须写「组件清单」「状态」「契约」三部分；
+5. 默认不覆盖人工修改，`--force` 才重写。
+
+## 总览页：`{{prototypeDir}}/{{prototypeIndex}}`
+
+- 展示**所有进行中 / 待验收**的任务（总进度、状态、最近更新），另有一区放最近完成。
+- **不要手改**：用 `node {{prototypeCheck}} --sync` 从各任务页重新汇总。
+- 判定 P11：总览页与任务页不一致（过期）直接判失败，并提示跑 `--sync`。
+
+## 判定表（`node {{prototypeCheck}}`，已接入 `{{gatePath}}` 与 CI）
+
+| id | 内容 | 级别 |
+|---|---|---|
+| P1 | 任务目录数不超过 {{prototypeKeep}} | error |
+| P2 | 任务目录名合法（字母 / 数字 / 中文 / 中划线 / 下划线） | error |
+| P3 | 每个任务目录都有 `{{prototypePage}}` | error |
+| P4 | 规划 ≥2 步、编号连续、标题非占位、百分比合法 | error |
+| P5 | 手填总进度必须等于汇总（推荐留 `—`） | error |
+| P6 | 100% 与「待跑 / 待验收」互斥 | error |
+| P7 | `docs/current.md` 有该任务名 | warn |
+| P8 | 测试用例 ≥1、`data-case` 唯一、`data-step` 有效 | error |
+| P9 | 进度记录末条 = 当前汇总、时间递增 | error |
+| P10 | 状态 ∈ 进行中 / 待验收 / 完成；完成要求全步 100% | error |
+| P11 | 总览页与任务页一致 | error |
+| P13 | DDD 领域段完整（上下文 / ≥3 术语 / 聚合 / 不变量） | error |
+| P14 | SDD 契约 ≥2 条、编号合法唯一、六格都填 | error |
+| P15 | TDD：用例挂契约、契约有用例、红/绿合法、完成时全绿 | error |
+| P16 | 每个规划步骤都绑定存在的契约 | error |
+| P17 | `docs/specs/<任务>/` 四份文档齐全且不留占位 | error |
+| P18 | 文档与页面一致（步骤数/标题、契约编号集合） | error |
+| P19 | `design.md` 含 DDD 四段 | error |
+| P20 | UI 设计稿必须是 antd v5（令牌 + ≥4 组件 + 说明），不得混入第二套设计体系 | error |
+| P21 | 有进度时方案必须「已确认」 | error |
+| P22 | 确认后 `docs/specs` 指纹不得变化，且复盘「已通过」 | error |
+| P23 | 有设计稿时 `design.md` 必须有 UI 摘要块且指纹一致（跑 `ui` 同步） | error |
+| P24 | 有 `docs/wiki` 时 `proposal.md` 必须有业务背景块且指纹一致（跑 `wiki` 同步） | error |
+
+新建的页面是骨架（含「待填」占位），**填完 DDD / SDD / TDD 与规划后 check 才会通过**——这是故意的。
+
+## 什么时候更新
+
+| 时机 | 必须改什么 |
+|---|---|
+| 任务发起 | 复制 `{{prototypeTemplate}}` 建页：先写 DDD 边界，再写 ≥2 条契约与失败用例 |
+| 写完一条契约 | 补它的输入 / 输出 / 错误语义 / 验收标准，并补至少一条 red 用例 |
+| 用例转绿 | `data-tdd` 改 `green`，写清跑的什么命令 |
+| 完成一步 | 该步 `data-pct` → 100%，追加一条进度记录，跑 `--sync` 刷新总览 |
+| 范围 / 方案变化 | 改契约与规划步骤，不另开页面；编号保持稳定 |
+| 任务收口 | 全部步骤 100%、状态改「完成」（或「待验收」）、用例全绿、`--sync` |
+
+## 保留策略：只留最近 {{prototypeKeep}} 个任务
+
+- 任务目录按 `{{prototypePage}}` 的修改时间排序，超过 {{prototypeKeep}} 个用 `--prune`（先 `--dry-run` 预览）。
+- `_template/`、`README.md`、`{{prototypeIndex}}` 不计入目录数。
+- 被清理的任务仍可在 git 历史里找回；要长期保留的结论写进 `docs/current.md`。

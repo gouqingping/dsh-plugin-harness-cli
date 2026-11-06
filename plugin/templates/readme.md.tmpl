@@ -1,0 +1,13 @@
+# {{project.name}} 的「三问」
+
+> 由 `dsh-plugin-harness-cli init` 生成，请按实际情况替换占位内容。
+
+**是什么**：{{positioning}}
+
+**怎么跑**：`{{commands.init}}`{{#if commands.dev}}，然后 `{{commands.dev}}`{{/if}}。
+
+**怎么测**：`{{testCmd}}`；提交前跑 `{{commands.gate}}`。
+
+## 给 Agent 的入口
+
+不要从零猜结构，先读 [`{{paths.agents}}`]({{paths.agents}})，它指向目录地图、工作流与完成定义。

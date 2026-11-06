@@ -1,0 +1,6 @@
+# yapf 自身就是 Google 官方维护的 Python 格式化器，google preset 即规范。
+# 只固定 column_limit（PyGuide 3.2：80 列），其余交给 preset，
+# 避免覆盖 preset 里已经正确的续行/缩进策略。
+[style]
+based_on_style = google
+column_limit = 80

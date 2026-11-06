@@ -1,0 +1,82 @@
+# {{task}} · UI 设计说明（Ant Design v5）
+
+> 生成物：`prototype/{{task}}/ui/`。设计稿是 `index.html`（离线、零依赖、静态 HTML），本页说明它按什么口径画。
+> 只改这个目录；业务契约在 `{{paths.specs}}/{{task}}/spec.md`，进度在 `../{{prototypePage}}`。
+
+## 1. 页面目标
+
+- 使用者：{{roleHint}}
+- 要完成的一件事：待补（一句话写清用户在这个页面完成的业务动作）
+- 不做的事：待补（明确不放进这个页面的能力）
+
+## 2. 信息架构
+
+| 区块 | 内容 | antd 组件 |
+|---|---|---|
+| 顶部导航 | 面包屑 + 用户入口 | Layout.Header、Breadcrumb、Avatar |
+| 侧边菜单 | 模块切换 | Layout.Sider、Menu |
+| 页头 | 任务名、说明、主操作 | PageHeader、Button（primary） |
+| 指标卡 | 3 个关键数字 | Row、Col、Card、Statistic |
+| 列表区 | 搜索 + 筛选 + 表格 + 分页 | Input.Search、Select、Table、Tag、Progress、Pagination |
+| 详情区 | 关键字段 | Descriptions、Tag |
+| 表单区 | 新建 / 编辑 | Modal/Drawer、Form、Input、Select、Radio、Switch、Input.TextArea |
+| 状态反馈 | 空 / 加载 / 异常 | Empty、Skeleton、Spin、Alert、message |
+
+## 3. 设计令牌（antd v5 默认主题）
+
+| 令牌 | 值 | 用在哪 |
+|---|---|---|
+| 主色 | `#1677ff` | 主按钮、链接、选中态、进度条 |
+| 成功 / 警告 / 错误 | `#52c41a` / `#faad14` / `#ff4d4f` | Tag、Alert、表单校验 |
+| 正文 / 次要 / 辅助文字 | `rgba(0,0,0,.88)` / `.65` / `.45` | 标题 / 说明 / 占位 |
+| 边框 / 分隔线 | `#d9d9d9` / `#f0f0f0` | 输入框、表格行、卡片分隔 |
+| 圆角 | 6px（控件）/ 8px（卡片） | 按钮、输入、卡片 |
+| 控件高度 | 32px | 按钮、输入、选择器 |
+| 字号 / 行高 | 14px / 1.5714 | 全局 |
+| 阴影 | `0 1px 2px rgba(0,0,0,.03)` | 卡片、页头 |
+
+> 主题定制只改 `index.html` 的 `:root { --ant-* }`，不要在页面上散落硬编码色值。
+
+## 4. 组件清单
+
+- 必须使用的 antd 组件：`Button`、`Table`、`Form`、`Input`、`Select`、`Tag`、`Progress`、`Modal`、`Pagination`、`Empty`、`Statistic`。
+- 布局：`Layout`（Sider + Header + Content）、`Row` / `Col`、`Card`、`Descriptions`。
+- 禁止：引入第二套设计体系（Bootstrap / Tailwind / 自研色板）；禁止用图片代替可实现的组件。
+
+## 5. 状态与交互
+
+| 状态 | 表现 | 说明 |
+|---|---|---|
+| 加载 | 首屏 Skeleton，列表 Spin | 不允许布局跳动 |
+| 空 | Empty + 一句引导文案 + 主操作 | 不留白屏 |
+| 错误 | Alert（error）+ 重试按钮 | 错误文案可读，不暴露堆栈 |
+| 无权限 | 页面级提示 + 申请入口 | 不显示半截数据 |
+| 成功 | message.success 2 秒后自动消失 | 不用弹窗打断 |
+
+交互规则：
+
+1. 危险操作（删除 / 释放）二次确认，按钮用 `danger`。
+2. 表单校验即时提示，提交失败时聚焦第一个错误项。
+3. 列表筛选条件写进 URL，刷新后保持。
+4. 分页默认 10 / 20 / 50，记住用户选择。
+
+## 6. 与契约的对应
+
+| 契约 | 页面元素 | 说明 |
+|---|---|---|
+| `S-01` | 待补 | 哪个区块承载这条契约的输入 / 输出 |
+| `S-02` | 待补 | 同上 |
+
+## 7. 响应式与可访问性
+
+- ≥1200px：三栏布局（Sider + 内容 + 指标卡横排）。
+- 768–1199px：指标卡换行，表格保留横向滚动。
+- <768px：隐藏 Sider，改用顶部菜单；表格转卡片列表。
+- 对比度满足 WCAG AA；所有可交互元素可键盘聚焦；图标按钮必须有 `aria-label`。
+
+## 8. 交付清单
+
+- [ ] `ui/index.html` 的区块与本说明一致
+- [ ] 组件全部落在 antd 体系内（无第二套设计体系）
+- [ ] 五种状态（加载 / 空 / 错误 / 无权限 / 成功）都有对应展示
+- [ ] 移动端断点验证通过

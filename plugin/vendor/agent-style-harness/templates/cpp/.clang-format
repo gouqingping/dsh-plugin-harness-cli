@@ -1,0 +1,23 @@
+# Google C++ Style —— 格式化部分。
+#
+# clang-format 内置 Google preset，这里只做"最少覆盖"：
+# preset 随 clang-format 版本演进，覆盖项越多，与规范漂移的风险越大。
+# 需要偏离 Google 的项，一律在评审中说明理由。
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# Google C++ Style 的 80 列限制
+ColumnLimit: 80
+
+# 按项目实际标准改写（Google 已转向 C++17/20）
+Standard: c++17
+
+# 头文件分组与排序：Google 要求相关头文件、C 系统头、C++ 标准库、其他库、本项目
+IncludeBlocks: Regroup
+SortIncludes: CaseSensitive
+
+# Google 要求 `int* p` 而不是 `int *p`
+DerivePointerAlignment: false
+PointerAlignment: Left
+...

@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "project": {
+    "name": "dsh-plugin-harness-cli",
+    "positioning": "公共项目配置工具：把 Harness 规范（入口 / 环境 / 范围 / 状态 / 门禁）变成可生成、可校验的配置。输入一份项目说明，输出一整套能被人和 Agent 直接使用的配置文件。",
+    "stack": [
+      "JavaScript"
+    ],
+    "runtime": "Node.js >= 18（零运行时依赖）",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "agents": "AGENTS.md",
+    "init": "init.sh",
+    "gate": "scripts/gate.sh",
+    "featureList": "docs/feature_list.json",
+    "progress": "claude-progress.md",
+    "taskQueue": "task_queue.json",
+    "docs": "docs",
+    "decisions": "docs/adr",
+    "adr": "docs/adr/ADR-0001-harness-cli.md",
+    "versionInfo": "",
+    "harness": ".harness",
+    "prototype": "prototype",
+    "prototypeCheck": "scripts/prototype-check.js"
+  },
+  "commands": {
+    "install": "npm install --no-audit --no-fund",
+    "dev": "",
+    "test": "node --test plugin/tests/",
+    "lint": "node plugin/bin/dsh-plugin-harness-cli.js doctor",
+    "typecheck": "",
+    "init": "",
+    "gate": "node --test plugin/tests/ && node plugin/bin/dsh-plugin-harness-cli.js doctor"
+  },
+  "dirs": [
+    {
+      "path": "plugin/bin/",
+      "desc": "CLI 入口，只做参数转发与退出码"
+    },
+    {
+      "path": "plugin/src/",
+      "desc": "实现：渲染、配置、探测、脚手架、判定、自检"
+    },
+    {
+      "path": "plugin/templates/",
+      "desc": "生成物模板，文案的唯一真源"
+    },
+    {
+      "path": "plugin/vendor/agent-style-harness/",
+      "desc": "随包的 harness-style（Python）：代码风格与提交信息判定，经 style 子命令调用"
+    },
+    {
+      "path": "plugin/tests/",
+      "desc": "node:test 用例，含“规则会失败”的反向用例"
+    },
+    {
+      "path": "docs/adr/",
+      "desc": "设计决策记录"
+    }
+  ],
+  "conventions": [
+    "零运行时依赖：只用 Node 内置模块；要引入依赖先写 ADR。",
+    "模板是唯一真源：文案改 templates/，不要在 src/ 里内联第二份。",
+    "新增子命令必须同时补 tests/ 用例与 README 用法表。",
+    "判定只读：check 不写盘，修复交给 init / agents。",
+    "退出码固定 0 / 1 / 2，与 harness-style 对齐，便于串进同一条门禁。"
+  ],
+  "workflow": [
+    "先读 `README.md` 与 `docs/adr/ADR-0001-harness-cli.md`，确认改动落在哪一层：模板、判定还是 CLI。",
+    "改 `plugin/templates/` 或 `plugin/src/`；新增判定必须同时加一条“它真的会失败”的用例。",
+    "跑 `node --test plugin/tests/` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。",
+    "文案类改动只改模板，不在代码里再写一份。",
+    "行为变化同步 README 用法表与生成源 `harness-cli.json`，必要时补 ADR。"
+  ],
+  "forbidden": [
+    "不覆盖已存在的非空文件（除显式 --force）；状态文件连 --force 也不覆盖。",
+    "不在 check 里改文件，也不静默降级：配置坏就退出 2。",
+    "不把规则只写进文档或提示词：规则必须落在 templates/ 或 check 的判定里。",
+    "不引入 npm 依赖（离线环境装不上就等于坏了）。",
+    "不在模板里写死本仓库的路径与版本号。",
+    "不在 plugin/ 之外放可执行代码：外壳只留文档与配置。"
+  ],
+  "dod": [
+    "`acceptance` 逐条核对通过，每条能说出验证方式。",
+    "`node --test plugin/tests/` 全绿，新增判定有对应的失败用例。",
+    "`node plugin/bin/dsh-plugin-harness-cli.js doctor` 无错误。",
+    "README 的用法表与实际子命令一致。",
+    "模板里没有写死本仓库路径或版本号的文案。",
+    "行为变化已记进 ADR 或 README。"
+  ],
+  "links": [
+    {
+      "title": "工具说明与用法",
+      "path": "README.md"
+    },
+    {
+      "title": "设计决策（零依赖 / docs 功能清单 / _VERSIONS / 状态文件保护）",
+      "path": "docs/adr/ADR-0001-harness-cli.md"
+    },
+    {
+      "title": "模板目录（生成物文案的唯一真源）",
+      "path": "plugin/templates/"
+    }
+  ],
+  "presets": {
+    "prototype": {
+      "enabled": false,
+      "dir": "prototype",
+      "keep": 10,
+      "progressPage": "progress.html",
+      "templatePage": "_template/progress.html"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# gate.sh —— 门禁：一个命令回答“能不能提交”
+# 由 dsh-plugin-harness-cli 生成。约定：遇错即停（set -e）、失败显式非零、成功给统一标识。
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/{{rootCd}}"
+
+fail() { echo "❌ $1"; exit 1; }
+
+echo "==> Lint"
+{{#if lintCmd}}{{lintCmd}} || fail "Lint 失败"
+{{/if}}{{#unless lintCmd}}echo "   ⚠️ 跳过：尚未定义 lint 命令"
+{{/unless}}
+echo "==> 测试"
+{{#if testCmd}}{{testCmd}} || fail "测试失败"
+{{/if}}{{#unless testCmd}}echo "   ⚠️ 跳过：尚未定义测试命令"
+{{/unless}}
+echo "==> 范围检查（WIP 上限 + 认领一致性）"
+{{wipCheck}}
+
+echo "✅ 所有门禁通过"

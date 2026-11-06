@@ -1,0 +1,70 @@
+> 读者：实施、售前。只讲业务与部署，不讲代码。
+
+## 1. 由哪几部分组成
+
+| 组成 | 是什么 | 是否单独部署 |
+|---|---|---|
+| 命令本体 | 生成骨架、校验、建任务页、认领、风格检查 | 否，随项目目录分发 |
+| 模板库 | 生成物的文案与结构 | 否，随命令本体 |
+| 生成物 | 落在仓库里的配置与文档 | 是，这是交付物 |
+| 可选集成 | 平台内以工具 / 斜杠命令形式调用 | 是，可选 |
+
+## 2. 装在哪
+
+- **形态 A · 源码直接运行**：工具目录放任意位置，本机有 Node.js 即可。
+- **形态 B · 平台集成**：工具目录挂到平台依赖目录并注册入口，平台内多出工具与命令。
+- **形态 C · 整目录拷走**：自包含，离线机器拷过去即可运行。
+
+三种形态行为一致，差别只在「谁触发」。
+
+## 3. 数据存在哪
+
+本仓库当前的生成物检查结果：
+
+| 项目 | 状态 |
+|---|---|
+| 配置 `{{configFile}}` | {{#if flags.hasFeatureList}}存在{{/if}}{{#unless flags.hasFeatureList}}未找到（跑一次初始化）{{/unless}} |
+| 入口地图 `{{paths.agents}}` | {{#if flags.hasAgents}}存在{{/if}}{{#unless flags.hasAgents}}缺失{{/unless}} |
+| 功能清单 `{{paths.featureList}}` | {{#if flags.hasFeatureList}}存在{{/if}}{{#unless flags.hasFeatureList}}缺失{{/unless}} |
+| 进度日志 `{{paths.progress}}` | {{#if flags.hasProgress}}存在{{/if}}{{#unless flags.hasProgress}}缺失{{/unless}} |
+| 任务日志 `docs/current.md` | {{#if flags.hasCurrent}}存在{{/if}}{{#unless flags.hasCurrent}}缺失{{/unless}} |
+| 任务队列 `{{paths.taskQueue}}` | {{#if flags.hasQueue}}存在{{/if}}{{#unless flags.hasQueue}}缺失{{/unless}} |
+| CI 骨架 `{{paths.harness}}/` | {{#if flags.hasCi}}存在{{/if}}{{#unless flags.hasCi}}缺失{{/unless}} |
+| 版本说明 `{{paths.versionInfo}}/` | {{#if flags.hasVersions}}存在{{/if}}{{#unless flags.hasVersions}}缺失{{/unless}} |
+
+结论：**全部是文本文件，没有数据库、没有服务端、没有用户表**；迁移 = 拷目录。
+
+## 4. 几部分怎么配合
+
+```
+配置（{{configFile}}）
+   ├──> 入口地图 {{paths.agents}}
+   ├──> 功能清单 {{paths.featureList}}
+   ├──> 进度日志 + 任务日志
+   ├──> 任务队列（并行上限 = {{wipLimit}}）
+   ├──> 任务页 {{paths.prototype}}/（页面 + 文档）
+   ├──> 认领 {{paths.claims}}/
+   └──> 门禁 {{paths.gate}}
+```
+
+两条硬线：**入口唯一**（人和 AI 都从入口地图进，指向的文件必须存在）；**状态唯一**（范围看功能清单、进度看任务页、文档看规范目录）。
+
+## 5. 断网或重启会怎样
+
+| 情形 | 影响 |
+|---|---|
+| 完全断网 | 不受影响（零运行时依赖） |
+| 机器重启 | 不受影响（无常驻进程） |
+| 会话中断 | 进度不丢（写在文件里） |
+| 平台重启 | 按注册项重新加载；未注册则不出现，命令行仍可用 |
+| 工具目录移动 | 生成物不受影响；平台注册路径需同步改 |
+| 换机器 | 拷目录即可 |
+
+## 6. 运行前置条件
+
+| 条件 | 是否必需 | 缺失后果 |
+|---|---|---|
+| Node.js ≥ 18 | 必需 | 命令无法运行 |
+| python3 ≥ 3.8 | 仅风格能力 | 该能力退出码 2，其余正常 |
+| git 仓库 | 建议 | 门禁只能人工触发（自检给警告） |
+| 写权限 | 必需 | 无法生成或更新文件 |

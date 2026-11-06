@@ -1,0 +1,27 @@
+# 跨语言基线：Google Style Guide 对所有语言的共同要求
+#   UTF-8、LF、文件末尾换行、行尾不留空白、空格缩进（Go/Makefile 除外）
+# 由 IDE / 编辑器直接读取，是最便宜的一层约束
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# C++: 2 / Java: 2 / TS: 2 已由 [*] 覆盖，仅列出需要偏离默认值的语言
+
+[*.py]
+indent_size = 4
+
+[*.go]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+# Markdown 行尾双空格是硬换行语法，不能被裁剪
+trim_trailing_whitespace = false

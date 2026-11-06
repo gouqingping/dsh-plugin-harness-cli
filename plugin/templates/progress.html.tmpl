@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{task}} · 任务</title>
+<style>
+  :root { --bg:#0f1115; --card:#181c23; --line:#2a3140; --fg:#e6e9ef; --dim:#98a2b3;
+          --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --run:#3b82f6; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:28px 20px 60px; background:var(--bg); color:var(--fg);
+         font:15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  h3 { font-size: 15px; margin: 0; }
+  .meta { color:var(--dim); font-size: 13px; margin: 0 0 4px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-top:16px; }
+  .bar { height:10px; background:#0b0e13; border-radius:999px; overflow:hidden; margin:10px 0 8px; }
+  .fill { height:100%; width:0; background:linear-gradient(90deg,var(--run),var(--ok)); transition:width .3s; }
+  .total { font-size:28px; font-weight:700; letter-spacing:.5px; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:12px; }
+  .pct { font-variant-numeric: tabular-nums; color:var(--dim); }
+  ol { margin:0; padding-left:0; list-style:none; display:grid; gap:12px; }
+  ol > li.step { border-top:1px solid var(--line); padding-top:12px; }
+  ol > li.step:first-child { border-top:0; padding-top:0; }
+  .step-no { color:var(--dim); font-variant-numeric: tabular-nums; }
+  dl, .terms { display:grid; grid-template-columns:120px 1fr; gap:6px 12px; margin:0; font-size:14px; }
+  dt { color:var(--dim); }
+  dd { margin:0; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px;
+         border:1px solid var(--line); color:var(--dim); }
+  .note { color:var(--dim); font-size:13px; margin:6px 0 0; }
+  ul.case-list, ul.log-list { margin:0; padding-left:0; list-style:none; display:grid; gap:6px; font-size:14px; }
+  ul.case-list > li, ul.log-list > li { border-bottom:1px dashed var(--line); padding-bottom:6px; }
+  ul.case-list > li:last-child, ul.log-list > li:last-child { border-bottom:0; padding-bottom:0; }
+  ul.plain { margin:0; padding-left:18px; font-size:14px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; }
+  tr:last-child td { border-bottom:0; }
+  code { background:#0b0e13; border:1px solid var(--line); border-radius:6px; padding:1px 5px; font-size:12px; }
+  .ddd { border-left:3px solid var(--run); }
+  .sdd { border-left:3px solid var(--warn); }
+  .tdd { border-left:3px solid var(--ok); }
+</style>
+</head>
+<body>
+<main data-task="{{task}}" data-task-status="进行中">
+  <header>
+    <h1 data-task-name>{{task}}</h1>
+    <p class="meta">用户原话：<span data-user-words>{{userWords}}</span></p>
+    <p class="meta">
+      最后更新：<time data-updated datetime="{{todayIso}}">{{todayIso}}</time>
+      · 状态：<span data-task-status-label>进行中</span>
+    </p>
+  </header>
+
+  <section class="overall">
+    <div class="row">
+      <div>
+        <div class="total" data-total-pct>—</div>
+        <p class="meta">已完成 <span data-done-count>—</span> / <span data-step-count>—</span> 步</p>
+      </div>
+      <span class="tag" data-overall-state>in_progress</span>
+    </div>
+    <div class="bar"><div class="fill" data-total-bar></div></div>
+    <p class="note">
+      总进度由任务规划的步骤百分比等权汇总，不手填；改完运行 <code>node {{prototypeCheck}}</code> 校验，
+      再用 <code>--sync</code> 刷新 <a href="../../{{prototypeDir}}/{{prototypeIndex}}">总览页</a>。
+    </p>
+  </section>
+
+  <section class="domain ddd">
+    <h2>1. 领域（DDD）：先划清边界，再谈实现</h2>
+    <p class="meta">限界上下文：<span data-context>待填：这个任务属于哪个限界上下文，边界外的东西不碰</span></p>
+    <dl class="terms" data-language>
+      <dt>术语 A</dt><dd>待填：本任务内的统一语言，一句话定义</dd>
+      <dt>术语 B</dt><dd>待填：同上</dd>
+      <dt>术语 C</dt><dd>待填：同上</dd>
+    </dl>
+    <h3 style="margin-top:14px">聚合 / 实体</h3>
+    <ul class="plain" data-aggregates>
+      <li>待填：聚合根或实体名 + 它守住的不变量</li>
+    </ul>
+    <h3 style="margin-top:14px">不变量（任何时刻都必须成立）</h3>
+    <ul class="plain" data-invariants>
+      <li>待填：一句话写清「什么条件下一定不成立」</li>
+    </ul>
+    <p class="note">边界没划清就动手，等于把不同上下文的概念混进同一个模型；这一节不许留待填。</p>
+  </section>
+
+  <section class="specs sdd">
+    <h2>2. 契约（SDD）：需求写成 AI 能精准执行的规格</h2>
+    <p class="note">
+      一条契约 = 输入 → 输出 + 错误语义 + 验收标准。契约编号被任务规划与测试用例引用，
+      编号不要改，改内容就好。
+    </p>
+    <table data-specs>
+      <thead>
+        <tr><th>编号</th><th>契约（做什么）</th><th>输入</th><th>输出</th><th>错误语义</th><th>验收标准</th></tr>
+      </thead>
+      <tbody>
+        <tr data-spec="S-01">
+          <td>S-01</td>
+          <td>待填：这个行为的一句话规格</td>
+          <td>待填：输入 / 前置状态</td>
+          <td>待填：输出 / 后置状态</td>
+          <td>待填：什么情况报什么错</td>
+          <td>待填：怎么算这条契约成立（可执行）</td>
+        </tr>
+        <tr data-spec="S-02">
+          <td>S-02</td>
+          <td>待填：第二条行为规格</td>
+          <td>待填</td>
+          <td>待填</td>
+          <td>待填</td>
+          <td>待填</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">没有错误语义的契约不是契约：至少要写清校验失败 / 边界值 / 并发冲突时怎么办。</p>
+  </section>
+
+  <section class="cases tdd">
+    <h2>3. 测试（TDD）：先用测试把行为锁死</h2>
+    <p class="note">
+      每条用例挂在一条契约上（<code>data-spec</code>），并标注红/绿（<code>data-tdd</code>）：
+      先 <code>red</code> 再实现到 <code>green</code>；每条契约至少一条用例。
+    </p>
+    <ul class="case-list" data-cases>
+      <li class="case" data-case="T-01" data-spec="S-01" data-step="1" data-tdd="red">
+        should_&lt;行为&gt;_when_&lt;条件&gt; · <code>待填：跑它的命令</code>
+      </li>
+      <li class="case" data-case="T-02" data-spec="S-02" data-step="2" data-tdd="red">
+        should_&lt;行为&gt;_when_&lt;条件&gt; · <code>待填：跑它的命令</code>
+      </li>
+    </ul>
+  </section>
+
+  <section class="steps">
+    <h2>4. 任务规划（可人工调整）</h2>
+    <p class="note">
+      编号从 1 连续；每步用 <code>data-spec</code> 指向它落地的契约。
+      增删步骤后重排 <code>data-step</code> 与序号文本；百分比变化后同步下面的「进度记录」。
+    </p>
+    <ol data-plan>
+      <li class="step" data-step="1" data-spec="S-01">
+        <div class="row">
+          <h3><span class="step-no">1</span>. 待填：步骤标题</h3>
+          <span class="pct step-pct" data-pct="0">0%</span>
+        </div>
+        <div class="bar"><div class="fill" data-step-bar></div></div>
+        <dl>
+          <dt>落地契约</dt><dd>S-01</dd>
+          <dt>改动落点</dt><dd>—</dd>
+          <dt>验证结果</dt><dd>待跑</dd>
+        </dl>
+      </li>
+      <li class="step" data-step="2" data-spec="S-02">
+        <div class="row">
+          <h3><span class="step-no">2</span>. 待填：步骤标题</h3>
+          <span class="pct step-pct" data-pct="0">0%</span>
+        </div>
+        <div class="bar"><div class="fill" data-step-bar></div></div>
+        <dl>
+          <dt>落地契约</dt><dd>S-02</dd>
+          <dt>改动落点</dt><dd>—</dd>
+          <dt>验证结果</dt><dd>待跑</dd>
+        </dl>
+      </li>
+      <li class="step" data-step="3" data-spec="S-02">
+        <div class="row">
+          <h3><span class="step-no">3</span>. 待填：步骤标题</h3>
+          <span class="pct step-pct" data-pct="0">0%</span>
+        </div>
+        <div class="bar"><div class="fill" data-step-bar></div></div>
+        <dl>
+          <dt>落地契约</dt><dd>S-02</dd>
+          <dt>改动落点</dt><dd>—</dd>
+          <dt>验证结果</dt><dd>待跑</dd>
+        </dl>
+      </li>
+    </ol>
+  </section>
+
+  <section class="log">
+    <h2>5. 进度记录（每次变化追加一行）</h2>
+    <p class="note">
+      只追加不删：<code>data-at</code> 是变化时间，<code>data-total</code> 是变化后的总进度，
+      必须与页面汇总值一致。
+    </p>
+    <ul class="log-list" data-log>
+      <li data-at="{{todayIso}}" data-total="0">建页：DDD / SDD / TDD 骨架就位，总进度 0%</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+(function () {
+  var steps = Array.prototype.slice.call(document.querySelectorAll('.step-pct'));
+  var values = steps.map(function (el) {
+    var raw = el.getAttribute('data-pct');
+    var n = Number(raw !== null ? raw : String(el.textContent).replace('%', ''));
+    return isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  });
+  var total = values.length === 0 ? 0 : Math.round(values.reduce(function (a, b) { return a + b; }, 0) / values.length);
+  var done = values.filter(function (v) { return v === 100; }).length;
+
+  function setText(sel, text) {
+    var el = document.querySelector(sel);
+    if (el) el.textContent = text;
+  }
+  setText('[data-total-pct]', total + '%');
+  setText('[data-done-count]', String(done));
+  setText('[data-step-count]', String(values.length));
+
+  var totalBar = document.querySelector('[data-total-bar]');
+  if (totalBar) totalBar.style.width = total + '%';
+
+  steps.forEach(function (el, i) {
+    el.textContent = values[i] + '%';
+    var card = el.closest('.step');
+    var bar = card && card.querySelector('[data-step-bar]');
+    if (bar) bar.style.width = values[i] + '%';
+  });
+
+  var state = document.querySelector('[data-overall-state]');
+  if (state) state.textContent = total === 100 ? 'done' : total > 0 ? 'in_progress' : 'pending';
+})();
+</script>
+</body>
+</html>

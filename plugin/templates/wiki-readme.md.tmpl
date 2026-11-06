@@ -1,0 +1,41 @@
+> 本页是 `docs/wiki/` 的目录与维护说明。受管区块由生成器维护；人工补充写在区块外。
+
+## 1. 这套 wiki 是什么
+
+- **来源**：从仓库文件扫描生成（配置、功能清单、任务页、规范文档、认领、门禁脚本），不靠记忆与推测。
+- **读者**：领导、售前、客户、实施、产品、测试、业务。
+- **更新方式**：执行生成命令；已存在则更新受管区块，缺失则新增；区块外的人工内容永远不动。
+
+## 2. 文件地图
+
+| 文件 | 回答什么问题 |
+|---|---|
+{{#each wiki.index}}| [{{name}}]({{name}}) | {{title}} |
+{{/each}}
+## 3. 生成时的事实快照
+
+| 事实 | 值 |
+|---|---|
+| 项目 | {{project.name}} v{{project.version}} |
+| 技术栈 | {{#if project.stack}}{{project.stack}}{{/if}}{{#unless project.stack}}未声明{{/unless}} |
+| 运行环境 | {{#if project.runtime}}{{project.runtime}}{{/if}}{{#unless project.runtime}}待补{{/unless}} |
+| 功能条目 | {{counts.features}}（已完成 {{counts.done}} / 进行中 {{counts.inProgress}} / 未开始 {{counts.pending}} / 被阻塞 {{counts.blocked}}） |
+| 任务页 | {{counts.tasks}}（进行中或待验收 {{counts.activeTasks}}） |
+| 规范文档 | {{counts.specs}} 个任务 |
+| 认领 | {{counts.claims}} 份 |
+| 测试文件 | {{counts.tests}} 个 |
+| 并行上限 | {{wipLimit}} |
+| 最近生成 | 见 `docs/wiki/.harness-wiki.json`（不进文档，避免每次生成都改内容） |
+
+{{#if wiki.extras}}
+## 4. 其他文件（未纳入自动生成，人工维护）
+
+{{#each wiki.extras}}- `{{this}}`
+{{/each}}
+{{/if}}
+## 5. 维护规则
+
+1. **只改受管区块内**的内容会被下次生成覆盖；要长期保留就写在区块外的人工补充区。
+2. 业务口径变更：先改判定规则或口径页，再重新生成。
+3. 文件增删：重新生成本页（受管区块会自动列出）。
+4. 冲突：若受管区块被人工改过，生成时会要求确认（更新 / 保留）。

@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.scratch/
+.harness-style/baseline.json
