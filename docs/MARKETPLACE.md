@@ -26,14 +26,14 @@
 | GitHub 公开仓库 | ✅ | <https://github.com/gouqingping/dsh-plugin-harness-cli>（`origin`；master 与远端一致） |
 | GitHub topic `dsh-plugin` | ✅ | 另加 `deepseek-harness` / `harness-engineering` / `agents-md` |
 | 根 `package.json` | ✅ | 包名 / 版本 / license / `repository` 指向本仓库 / `dsh.bundle.patch` |
-| 安装验证 | ✅ | DSH 0.2.2-rc.1：`dsh plugin --profile markettest add <仓库路径>` 成功后 profile 的 `dsh.profile.bundles` 自动追加本包，`dsh --profile markettest --dump-config` 出现 `- id: harness-cli` 行 |
-| 收录 Issue | ✅ | <https://github.com/dshplugin/dsh-plugin-hub/issues/661> |
-| NPM 发布 | ⬜ | 未发布。发布后站点会把条目升级成 npm 一键安装，并进入 DSH「插件中心」 |
+| 安装验证 | ✅ | DSH 0.2.2-rc.1：`dsh plugin --profile markettest add dsh-plugin-harness-cli` 装上 `0.1.0`，profile 的 `dsh.profile.bundles` 自动追加本包，`dsh --profile markettest --dump-config` 出现 `- id: harness-cli` 行，装完 11 个 `harness_cli_*` 工具随即注册进运行中的 DSH |
+| 收录 Issue | ✅ | <https://github.com/dshplugin/dsh-plugin-hub/issues/661>（已补评论把安装命令升级成 npm 一键安装） |
+| NPM 发布 | ✅ | [`dsh-plugin-harness-cli@0.1.0`](https://www.npmjs.com/package/dsh-plugin-harness-cli)，`dist-tags.latest` 指向 0.1.0 |
 
-> NPM 侧未登录：`~/.npmrc` 里 `registry.npmjs.org` 的 token 已失效（`npm whoami` → 401）。
-> 本机先 `npm login` 再 `npm publish`（包约 12.8 MB / 解包 42 MB，主要是 `plugin/vendor`）。
-> 包名 `dsh-plugin-harness-cli` 在 npm 上仍可用；`repository` 已指向本仓库，
-> 发布后 dsh-plugin.org 会把 NPM 包绑到已有条目上，无需重复提交。
+> 发布时踩到的两个 npm 现状（下次发版照做即可）：
+> - 带 bypass-2FA 的 granular token 已经**不能**直接发布/暂存（`403 You may not perform that action with these credentials`）。
+>   必须在交互终端里 `npm publish`，走 web auth 完成 2FA；发布是异步的，`PUT 202` 之后要等 2–3 分钟才在 registry 出现。
+> - 处理期间 registry 会生成 `0.0.0-stage` 占位 stub（`"stub": true`，2 个文件）。它是正常现象，完成后 `latest` 会自动指回真实版本；想去掉可以 `npm unpublish dsh-plugin-harness-cli@0.0.0-stage`。
 
 ## 三、提交 Issue 模板（可直接复制）
 
@@ -89,14 +89,19 @@ CC0-1.0
 - [x] repository in package.json matches this owner/repo.
 ```
 
-## 四、发布 NPM（想让插件进「插件中心」才需要）
+## 四、发布 NPM（已发布 0.1.0，发新版本的步骤）
 
 ```sh
-npm login              # 当前 ~/.npmrc 里的 npmjs token 已失效，必须重新登录
-npm publish            # 包名：dsh-plugin-harness-cli；scope 包需 npm publish --access public
+npm login              # 必须交互式登录：bypass-2FA token 已不能直接发布
+npm pack --dry-run     # 先看内容：2542 个文件、约 12.8 MB tar / 42 MB 解包
+npm publish            # 会打开 web auth 完成 2FA；PUT 202 后等 2–3 分钟才出现在 registry
 ```
 
-发布前想先看内容：`npm pack --dry-run`（本包 2542 个文件、约 12.8 MB tar / 42 MB 解包）。
+`dist-tags.latest` 确认：
+
+```sh
+npm view dsh-plugin-harness-cli dist-tags   # { latest: '0.1.0' }
+```
 
 注意：`files` 里带 `plugin/vendor`（约 48 MB，含离线 yapf/isort/commitlint），发布包会比较大，
 但换来「装完即可离线跑 `style`」。不想带可以删掉 `files` 里的 `plugin/vendor`，`style` 会退化为不可用。
