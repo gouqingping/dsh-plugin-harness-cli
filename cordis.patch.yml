@@ -1,0 +1,5 @@
+# dsh-plugin-harness-cli 的 profile 层：由 `dsh plugin --profile web add dsh-plugin-harness-cli` 自动合入。
+# 加载顺序：bundle 层先于 profile 的用户 patch 层；卸载时整包移除即可。
+- insert:
+    - id: harness-cli
+      name: 'dsh-plugin-harness-cli'

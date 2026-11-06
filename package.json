@@ -1,0 +1,53 @@
+{
+  "name": "dsh-plugin-harness-cli",
+  "version": "0.1.0",
+  "description": "DSH 插件：把「项目怎么协作」变成可生成、可校验的文件 —— AGENTS.md / 任务页 / 规范文档 / 门禁 / 业务 wiki，模型可直接调用。",
+  "main": "plugin/cordis.mjs",
+  "exports": {
+    ".": "./plugin/cordis.mjs",
+    "./cordis": "./plugin/cordis.mjs",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-plugin-harness-cli": "plugin/bin/dsh-plugin-harness-cli.js"
+  },
+  "files": [
+    "plugin/**",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "harness-engineering",
+    "agents-md",
+    "tdd",
+    "ddd",
+    "sdd",
+    "codex",
+    "developer-tools"
+  ],
+  "license": "CC0-1.0",
+  "scripts": {
+    "test": "node --test plugin/tests/",
+    "doctor": "node plugin/bin/dsh-plugin-harness-cli.js doctor",
+    "gate": "node --test plugin/tests/ && node plugin/bin/dsh-plugin-harness-cli.js doctor"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gouqingping/dsh-plugin-harness-cli.git"
+  },
+  "homepage": "https://github.com/gouqingping/dsh-plugin-harness-cli",
+  "bugs": {
+    "url": "https://github.com/gouqingping/dsh-plugin-harness-cli/issues"
+  }
+}

@@ -1,5 +1,55 @@
 # dsh-plugin-harness-cli
 
+> **DSH 插件**：装好后在 DSH 里获得 11 个工具（`harness_cli_*`）与 10 条斜杠命令（`/harness-cli-*`），
+> 让模型按同一套 Harness 规范生成、校验、推进项目，而不是靠提示词自觉。
+
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/your-owner/dsh-plugin-harness-cli)
+
+## 安装（DSH 插件市场）
+
+```sh
+# 已发布到 npm 后（会出现在 DSH 插件中心）
+dsh plugin --profile web add dsh-plugin-harness-cli
+
+# 只从源码安装（不需要 npm 包，也能用）
+dsh plugin --profile web add github:qingping/dsh-plugin-harness-cli
+```
+
+装完重启 DSH，然后在任意项目里执行 `/harness-cli-init`；命令与工具清单见 `/harness-cli-help`。
+
+> 收录状态、提交模板与自查项见 [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md)；
+> `node --test plugin/tests/` 里的 `listing.test.js` 会断言仓库内的收录要求。
+
+| 项 | 值 |
+|---|---|
+| 一句话价值 | 把「项目怎么协作」变成可生成、可校验的文件：入口 / 环境 / 范围 / 状态 / 门禁 / 规范文档 / 业务 wiki 全自动，模型直接调用。 |
+| 能力分类 | 开发与运维 |
+| 支持 profile | `web`、`desktop`（默认值 `web`，见安装命令） |
+| 兼容与运行要求 | DSH 0.1.5 系列（host 协议 3）；Node.js ≥ 18；零运行时依赖、离线可用；`style` 子命令需要本机 `python3` |
+| 权限与外部服务 | 只读写**目标仓库内**的文件；不联网、不收集数据；`plans --serve` 仅监听 `127.0.0.1`（可选） |
+| 许可证 | CC0-1.0（公共领域奉献，见 [LICENSE](LICENSE)） |
+| 打包形态 | 根 `package.json` + `cordis.patch.yml`（`dsh.bundle.patch`），`main` 导出 `apply(ctx)`；安装后由 DSH 自动合入 profile |
+
+### 真实输出（演示）
+
+```
+$ dsh-plugin-harness-cli init --preset prototype
+  CREATE  harness-cli.json / AGENTS.md / init.sh / scripts/gate.sh / docs/feature_list.json …
+  CREATE  prototype/README.md / prototype/progress.html / scripts/prototype-check.js
+已写入 20 项，跳过 0 项
+
+$ dsh-plugin-harness-cli plan 登录页面
+  CREATE  docs/specs/登录页面/{proposal,spec,design,tasks}.md
+  WRITE   prototype/登录页面/{progress,plan}.html（契约 / 用例 / 规划已同步）
+  规范文档：写入 4 篇，保留 0 篇
+
+$ dsh-plugin-harness-cli check
+  OK    A102   AGENTS.md 八节齐全
+  OK    F107   WIP 正常（in_progress = 0 / 上限 1）
+  OK    C201   in_progress 全部有认领（0 个）
+  合计 23 项：错误 0，警告 2。结果：通过（有警告）✓
+```
+
 公共项目配置工具：按 Harness Engineering 规范，为任意仓库生成**四件套 + 门禁 + 状态文件**，
 并让 `AGENTS.md` 由配置直接生成、由 `check` 校验。零运行时依赖，离线可用。
 
