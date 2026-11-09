@@ -18,7 +18,7 @@ dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
 装完重启 DSH，然后在任意项目里执行 `/harness-cli-init`；命令与工具清单见 `/harness-cli-help`。
 
 > 收录状态、提交模板与自查项见 [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md)；
-> `node --test plugin/tests/` 里的 `listing.test.js` 会断言仓库内的收录要求。
+> `node --test` 里的 `listing.test.js` 会断言仓库内的收录要求。
 
 | 项 | 值 |
 |---|---|
@@ -69,7 +69,7 @@ common-agent/                    ← 工作区里的项目目录
 │   ├── src/                     实现
 │   ├── templates/               生成物模板（文案唯一真源）
 │   ├── cordis.mjs               DSH 适配层：把子命令注册成工具与斜杠命令（导入 DSH 时用）
-│   ├── tests/                   98 个用例
+│   ├── tests/                   108 个用例
 │   ├── vendor/agent-style-harness/  随包的 harness-style（Python，含离线依赖）
 │   └── package.json             name / bin / scripts
 ├── harness-cli.json             插件自身的配置（AGENTS.md 由它生成）
@@ -114,11 +114,21 @@ common-agent/                    ← 工作区里的项目目录
 | `ui [任务名] [--user-words "原话"] [--force]` | 生成 antd 风格 UI 设计稿、同步 `design.md`，并把「设计说明缺口」列成清单；斜杠命令会自动发起补全 | 0 / 1 / 2 |
 | `check [--strict] [--json]` | 只读校验；`--strict` 让警告也算失败 | 0 / 1 / 2 |
 | `doctor [--json]` | 工具自检：Node 版本、模板、配置、可写、是否 git 仓库、python3 | 0 / 2 |
-| `plans [--serve] [--port 7788]` | 根目录 `plans.html`：任务总览（展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘 | 0 / 2 |
+| `plans [--serve] [--port 7788]` | 根目录 `plans.html`：任务总览（**点任务名弹窗看 `progress.html`** / 展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘 | 0 / 2 |
 | `wiki [--update\|--keep\|--ask] [--check] [--dry-run]` | 生成 / 更新 `docs/wiki`（13 篇业务文档），并同步每个任务 `proposal.md` 的业务背景区块 | 0 / 1 / 2 |
 | `style <参数...>` | 把参数原样转给随包的 `harness-style`（代码风格 / 提交信息） | 透传 |
 
 通用参数：`--root <dir>` 指定目标仓库，`--json` 机器可读，`--dry-run` 只打印不落盘。
+
+### 3.1 开工前先选操作模式（默认动作）
+
+每个 Agent 开始任务前先问用户二选一：
+
+- **手动**：所有操作都等用户确认，删除 / 覆盖 / 确认方案 / 改文档都要先问；
+- **自动 loop**：任务自动推进，所有确认与选择都采用推荐项，不再逐项询问。
+
+推荐项的口径：**复盘通过 + 文档指纹未变 + 不破坏人工内容**；有风险时取保守项，
+并在进度记录里注明「自动 loop」。用户没回答前不开工。这条规则会写进生成的 `AGENTS.md`。
 
 ## 4. 生成物
 
@@ -201,7 +211,8 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
 2. **SDD 定契约**：每条行为写成 `S-01` 起的六格契约（编号 / 契约 / 输入 / 输出 / 错误语义 / 验收标准），≥2 条；
 3. **TDD 保质量**：每条用例挂在一条契约上，先 `red` 再 `green`，每条契约至少一条用例；
 4. **任务规划**：编号 1..N 的步骤（可人工增删），每步绑定一条契约；
-5. **进度记录**：每次变化追加一条，末条总进度必须等于汇总。
+5. **进度记录**：每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻追加一条并更新任务页，
+   不攒到收工；末条总进度必须等于汇总。
 
 状态放 `prototype/`，文档归纳到 `docs/specs/`：
 
@@ -240,6 +251,7 @@ node scripts/prototype-check.js --prune --dry-run
 1. `review <task>` —— Agent 复盘：跑项目判定（文档与页面一致性），写 `review.md`（含四份文档的指纹）；
 2. `plan <task> --confirm --by "确认人"` —— 人最终确认：核对复盘指纹后，把方案标为「已确认」并记下文档指纹；
 3. 之后才能 `progress` 推进度。**文档在确认后又被改过，确认立即失效**（progress 拒绝、P22 失败），要重新复盘再确认。
+   每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻跑一次 `progress` 并同步总览，不要攒到收工一次性补。
 需要界面时先跑 `ui <task>`：生成 `prototype/<task>/ui/index.html`（antd v5 令牌 + 布局 + 表格 + 表单 + 状态）
 与设计说明；默认不覆盖人工修改，`--force` 才重写。所有 UI 统一 antd，P20 会拦第二套设计体系。
 
@@ -370,7 +382,7 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 （**默认启用任务页能力**）、`/harness-cli-review [任务名]`、`/harness-cli-plan [任务名] [--confirm --by "人"]`、
 `/harness-cli-progress <任务名> --step N --pct X`、`/harness-cli-ui [任务名] [--force]`、
 `/harness-cli-wiki [root] [--update|--keep|--check]`、`/harness-cli-doctor [root]`、
-`/harness-cli-plans [--serve] [--port 7788] [--stop]`（任务总览：起本机服务后按钮可直接删除 / 重跑 / 保存）、
+`/harness-cli-plans [--serve] [--port 7788] [--stop]`（任务总览：起本机服务后，点任务名弹窗看详细进度，按钮可直接删除 / 重跑 / 保存）、
 `/harness-cli-help [命令或工具名]`（一次看全所有工具与命令的用法）。
 
 两个宿主细节写在 `cordis.mjs` 顶部：DSH 桌面端是 Electron，所以子进程要带
@@ -383,7 +395,7 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 ## 12. 开发
 
 ```sh
-node --test plugin/tests/                    # 98 个用例
+node --test                                  # 108 个用例
 node plugin/bin/dsh-plugin-harness-cli.js doctor       # 自检（Node / 模板 / 配置 / 可写）
 ```
 

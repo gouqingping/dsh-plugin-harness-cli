@@ -5,7 +5,7 @@
 
 ## 一、本地可验证项（自动检查）
 
-`node --test plugin/tests/` 会跑 `listing.test.js`，覆盖：
+`node --test` 会跑 `listing.test.js`，覆盖：
 
 | 要求 | 检查方式 |
 |---|---|
@@ -17,7 +17,7 @@
 | 许可证 | 根 `package.json` 的 `license` + 仓库根 `LICENSE` |
 | CLI 入口存在 | `plugin/bin/dsh-plugin-harness-cli.js` |
 
-跑完 `node --test plugin/tests/` 即完成本地自查。
+跑完 `node --test` 即完成本地自查。
 
 ## 二、远端状态
 

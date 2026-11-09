@@ -65,6 +65,8 @@ function collectTasks(root, config) {
     }
     rows.push({
       name: entry.name,
+      // 任务名 → 详细进度页的相对路径；服务端与 file:// 都直接可用（中文按需编码）。
+      page: toPosix(path.relative(root, page)),
       status: parsed.status,
       total: parsed.total,
       updated: parsed.updated,
@@ -304,8 +306,16 @@ function servePlans(root, config, port) {
       }
     }
 
-    // 页面与静态文件（用于 iframe 预览 UI 设计稿）
-    const rel = pathname === '/' ? PLANS_FILE : pathname.replace(/^\/+/, '');
+    // 总览页每次请求都按当前任务页重新渲染：Agent 每一步更新 progress.html 后，
+    // 刷新总览就能看到最新状态，不依赖上一次 plans 命令写下的静态快照。
+    if (pathname === '/') {
+      res.writeHead(200, {'Content-Type': MIME['.html'], 'Cache-Control': 'no-store'});
+      res.end(renderPlans(rootAbs, config));
+      return;
+    }
+
+    // 页面与静态文件（用于 iframe 预览 UI 设计稿 / 任务详细进度）
+    const rel = pathname.replace(/^\/+/, '');
     const target = path.resolve(rootAbs, rel);
     if (target !== rootAbs && !target.startsWith(`${rootAbs}${path.sep}`)) {
       return sendJson(res, 403, {error: '越界访问'});

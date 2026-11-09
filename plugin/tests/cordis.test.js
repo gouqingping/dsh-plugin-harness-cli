@@ -261,6 +261,7 @@ test('/harness-cli-help：列出全部命令与工具，并支持按名字查看
   for (const item of mod.COMMAND_MANUAL) assert.ok(full.text.includes('/' + item.name), `缺少 ${item.name}`);
   for (const spec of mod.TOOL_SPECS) assert.ok(full.text.includes(spec.toolName), `缺少 ${spec.toolName}`);
   assert.match(full.text, /任务标准流程/);
+  assert.match(full.text, /自动 loop/);
   assert.match(full.text, /退出码/);
 
   const one = await help.handler({rawInput: 'ui'});

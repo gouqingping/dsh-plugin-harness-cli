@@ -42,6 +42,9 @@
   .progress-track { flex:1; height:8px; background:rgba(0,0,0,.06); border-radius:100px; overflow:hidden; }
   .progress-fill { height:100%; background:var(--ant-color-primary); border-radius:100px; }
   .hint { color:var(--ant-color-text-tertiary); font-size:13px; }
+  .task-link { padding:0; border:0; background:transparent; color:var(--ant-color-text); font:inherit; font-weight:600;
+               cursor:pointer; text-align:left; }
+  .task-link:hover { color:var(--ant-color-primary); text-decoration:underline; }
   .offline { margin-bottom:16px; padding:10px 14px; border-radius:var(--ant-border-radius-lg);
              border:1px solid #ffe58f; background:#fffbe6; color:var(--ant-color-text); }
   .docs { display:grid; gap:12px; }
@@ -83,7 +86,7 @@
   <div class="card">
     <table>
       <thead>
-        <tr><th>任务</th><th>状态</th><th>总进度</th><th>UI</th><th>最近更新</th><th style="text-align:right">操作</th></tr>
+        <tr><th>任务（点击看详细进度）</th><th>状态</th><th>总进度</th><th>UI</th><th>最近更新</th><th style="text-align:right">操作</th></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -103,6 +106,21 @@
       </div>
     </div>
     <iframe id="modal-frame" title="UI 预览"></iframe>
+  </div>
+</div>
+
+<div class="modal-mask" id="progress-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <b id="progress-modal-title">任务详细进度</b>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="hint">读取任务页 progress.html</span>
+        <a id="progress-modal-open" href="#" target="_blank" rel="noopener">新窗口打开</a>
+        <button class="btn btn-sm" id="progress-refresh">刷新</button>
+        <button class="btn btn-sm" id="progress-close">关闭</button>
+      </div>
+    </div>
+    <iframe id="progress-frame" title="任务详细进度"></iframe>
   </div>
 </div>
 
@@ -173,7 +191,7 @@
 
   function rowHtml(task, index) {
     return '<tr data-task="' + esc(task.name) + '">' +
-      '<td><b>' + esc(task.name) + '</b></td>' +
+      '<td><button type="button" class="task-link" data-progress="' + index + '" title="查看当前任务详细进度（progress.html）">' + esc(task.name) + '</button></td>' +
       '<td><span class="tag ' + tagClass(task.status) + '">' + esc(task.status || '进行中') + '</span></td>' +
       '<td><span class="progress"><span class="progress-track"><span class="progress-fill" style="width:' + (task.total || 0) + '%"></span></span><span>' + (task.total || 0) + '%</span></span></td>' +
       '<td>' + (task.hasUi ? '<a href="#" data-ui="' + index + '">预览</a>' : '—') + '</td>' +
@@ -242,6 +260,27 @@
     toast('已在新窗口打开设计稿');
   }
 
+  /** 任务详细进度：任务名可点，弹窗里直接加载 xxxx/progress.html。 */
+  function progressUrl(task) {
+    var relative = encodeURI(task.page || ('prototype/' + task.name + '/progress.html'));
+    return ONLINE ? '/' + relative : relative;
+  }
+
+  function openProgress(index) {
+    var task = taskOf(index);
+    if (!task) return;
+    var url = progressUrl(task);
+    document.getElementById('progress-modal-title').textContent = task.name + ' · 详细进度';
+    document.getElementById('progress-modal-open').href = url;
+    document.getElementById('progress-frame').src = url;
+    document.getElementById('progress-modal').classList.add('is-open');
+  }
+
+  function closeProgress() {
+    document.getElementById('progress-modal').classList.remove('is-open');
+    document.getElementById('progress-frame').src = 'about:blank';
+  }
+
   function post(api, payload) {
     return fetch('/api/' + api, {
       method: 'POST',
@@ -265,6 +304,12 @@
     document.getElementById('modal').classList.remove('is-open');
     document.getElementById('modal-frame').src = 'about:blank';
   });
+  document.getElementById('progress-close').addEventListener('click', closeProgress);
+  document.getElementById('progress-refresh').addEventListener('click', function () {
+    var frame = document.getElementById('progress-frame');
+    if (frame.src && frame.src !== 'about:blank') frame.src = frame.src;
+    toast('已刷新任务详细进度', 1500);
+  });
 
   document.addEventListener('click', function (event) {
     var target = event.target;
@@ -278,6 +323,10 @@
     }
     if (ds.collapse !== undefined) {
       setExpanded(ds.collapse, false);
+      return;
+    }
+    if (ds.progress !== undefined) {
+      openProgress(ds.progress);
       return;
     }
     if (ds.chat !== undefined) {

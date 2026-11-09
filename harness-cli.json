@@ -7,7 +7,7 @@
       "JavaScript"
     ],
     "runtime": "Node.js >= 18（零运行时依赖）",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "paths": {
     "agents": "AGENTS.md",
@@ -27,11 +27,11 @@
   "commands": {
     "install": "npm install --no-audit --no-fund",
     "dev": "",
-    "test": "node --test plugin/tests/",
+    "test": "node --test",
     "lint": "node plugin/bin/dsh-plugin-harness-cli.js doctor",
     "typecheck": "",
     "init": "",
-    "gate": "node --test plugin/tests/ && node plugin/bin/dsh-plugin-harness-cli.js doctor"
+    "gate": "node --test && node plugin/bin/dsh-plugin-harness-cli.js doctor"
   },
   "dirs": [
     {
@@ -69,7 +69,7 @@
   "workflow": [
     "先读 `README.md` 与 `docs/adr/ADR-0001-harness-cli.md`，确认改动落在哪一层：模板、判定还是 CLI。",
     "改 `plugin/templates/` 或 `plugin/src/`；新增判定必须同时加一条“它真的会失败”的用例。",
-    "跑 `node --test plugin/tests/` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。",
+    "跑 `node --test` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。",
     "文案类改动只改模板，不在代码里再写一份。",
     "行为变化同步 README 用法表与生成源 `harness-cli.json`，必要时补 ADR。"
   ],
@@ -83,7 +83,7 @@
   ],
   "dod": [
     "`acceptance` 逐条核对通过，每条能说出验证方式。",
-    "`node --test plugin/tests/` 全绿，新增判定有对应的失败用例。",
+    "`node --test` 全绿，新增判定有对应的失败用例。",
     "`node plugin/bin/dsh-plugin-harness-cli.js doctor` 无错误。",
     "README 的用法表与实际子命令一致。",
     "模板里没有写死本仓库路径或版本号的文案。",

@@ -831,6 +831,7 @@ const COMMAND_MANUAL = [
 /** 任务标准流程（帮助里反复用到，单独一份）。 */
 const WORKFLOW_TEXT = [
   '任务标准流程（顺序不能颠倒）：',
+  '  0. 开工前先问用户：手动（每步等确认）还是自动 loop（自动推进、所有确认 / 选择走推荐项）',
   '  1. /harness-cli-init                    生成骨架（默认带任务页能力）',
   '  2. /harness-cli-ui <任务>               建任务页 + 四份规范文档 + 方案页；需要界面时生成 antd 设计稿',
   '  3. 人改 docs/specs/<任务>/*.md       proposal / spec / design / tasks（可直接改）',

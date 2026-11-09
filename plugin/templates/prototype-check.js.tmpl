@@ -413,7 +413,7 @@ function checkTask(name, html, page) {
   }
 
   if (page.total > 0 && page.log.length === 0) {
-    add('P9', 'error', `${label} 有进度但没有「进度记录」：每次变化追加 <li data-at="..." data-total="...">`);
+    add('P9', 'error', `${label} 有进度但没有「进度记录」：每一步变化都立刻追加 <li data-at="..." data-total="...">`);
   }
   if (page.log.length > 0) {
     const last = page.log[page.log.length - 1];

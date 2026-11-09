@@ -10,6 +10,7 @@
  */
 
 const path = require('path');
+const VERSION = require('../package.json').version;
 const {loadTemplate} = require('./templates');
 const {render} = require('./render');
 const {buildContext} = require('./context');
@@ -81,7 +82,7 @@ function summaryJson(config, ctx) {
     keyDecisions: [],
     nextStep: '补全 harness-cli.json 的 positioning 与 dirs，重跑 dsh-plugin-harness-cli agents',
     lastVerification: '',
-    generatedBy: 'dsh-plugin-harness-cli@0.1.0',
+    generatedBy: `dsh-plugin-harness-cli@${VERSION}`,
     updatedAt: new Date().toISOString(),
     generatedAt: ctx.today,
   };

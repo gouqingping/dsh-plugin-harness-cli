@@ -2,6 +2,7 @@
 
 > 本文件是仓库入口地图，不是手册：约 100 行，细节都在 `docs/`，由 §8 链接过去。
 > 由 `dsh-plugin-harness-cli agents` 从 `{{configFile}}` 生成 —— 要改内容就改配置再重新生成，不要手改。
+> **开工前先问用户**：所有操作都等确认（手动），还是所有任务自动 loop（自动推进，所有确认 / 选择都采用推荐项）？未回答不开工。
 
 ## 1. 项目定位
 
@@ -38,7 +39,8 @@
 {{#if prototype.enabled}}### 5.1 任务进度页（进度的唯一入口）
 
 - 一个任务一页：`{{prototype.dir}}/<kebab-case 任务名>/{{prototypePage}}`，从 `{{prototype.dir}}/{{prototypeTemplate}}` 复制。
-- 只改步骤百分比（`.step-pct` 的 `data-pct`），总进度由页面内联脚本等权汇总回写，**不手填**。
+- **每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻更新本页并同步总览**，不许攒到收工再补；只改步骤百分比（`.step-pct` 的 `data-pct`），总进度由页面内联脚本等权汇总回写，**不手填**。
+- 自动 loop 下，所有确认都走推荐项：复盘通过且文档指纹未变才确认；有风险时取保守项，并把「自动 loop」写进进度记录。
 - 收口才到 100%：真机未验收、回归没跑完时保留「待验收」步。
 - 与 `docs/current.md` 同一轮更新；目录数上限 {{prototype.keep}}，超了跑 `node {{paths.prototypeCheck}} --prune`。
 

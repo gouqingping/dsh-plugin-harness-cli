@@ -2,6 +2,7 @@
 
 > 本文件是仓库入口地图，不是手册：约 100 行，细节都在 `docs/`，由 §8 链接过去。
 > 由 `dsh-plugin-harness-cli agents` 从 `harness-cli.json` 生成 —— 要改内容就改配置再重新生成，不要手改。
+> **开工前先问用户**：所有操作都等确认（手动），还是所有任务自动 loop（自动推进，所有确认 / 选择都采用推荐项）？未回答不开工。
 
 ## 1. 项目定位
 
@@ -9,7 +10,7 @@
 
 - 技术栈：JavaScript
 - 运行环境：Node.js >= 18（零运行时依赖）
-- 版本：0.1.0
+- 版本：0.1.1
 
 ## 2. 目录地图
 
@@ -28,9 +29,9 @@
 
 | 操作 | 命令 |
 |---|---|
-| 跑测试 | `node --test plugin/tests/` |
+| 跑测试 | `node --test` |
 | Lint | `node plugin/bin/dsh-plugin-harness-cli.js doctor` |
-| 门禁（提交前必跑） | `node --test plugin/tests/ && node plugin/bin/dsh-plugin-harness-cli.js doctor` |
+| 门禁（提交前必跑） | `node --test && node plugin/bin/dsh-plugin-harness-cli.js doctor` |
 | 查看并行认领 | `node scripts/claim.js list` |
 | 认领 / 释放任务 | `node scripts/claim.js add F-001 --owner <标识> --scope <路径>` |
 
@@ -50,7 +51,7 @@
 
 1. 先读 `README.md` 与 `docs/adr/ADR-0001-harness-cli.md`，确认改动落在哪一层：模板、判定还是 CLI。
 2. 改 `plugin/templates/` 或 `plugin/src/`；新增判定必须同时加一条“它真的会失败”的用例。
-3. 跑 `node --test plugin/tests/` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。
+3. 跑 `node --test` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。
 4. 文案类改动只改模板，不在代码里再写一份。
 5. 行为变化同步 README 用法表与生成源 `harness-cli.json`，必要时补 ADR。
 
@@ -80,7 +81,7 @@
 把 `done` 从感觉变成可勾选条件，缺一条就不算完成：
 
 - [ ] `acceptance` 逐条核对通过，每条能说出验证方式。
-- [ ] `node --test plugin/tests/` 全绿，新增判定有对应的失败用例。
+- [ ] `node --test` 全绿，新增判定有对应的失败用例。
 - [ ] `node plugin/bin/dsh-plugin-harness-cli.js doctor` 无错误。
 - [ ] README 的用法表与实际子命令一致。
 - [ ] 模板里没有写死本仓库路径或版本号的文案。

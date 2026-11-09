@@ -44,6 +44,26 @@ test('AGENTS.md 与认领 README 不出现空的占位符', () => {
   assert.ok(claims.includes(`\`${CONFIG.paths.taskQueue}\``), '认领 README 没有写清任务队列路径');
 });
 
+test('AGENTS.md 开工前先问操作模式，并写明自动 loop 的确认口径', () => {
+  const ctx = buildContext(CONFIG, {});
+  const agents = render(loadTemplate('agents'), ctx);
+  assert.match(agents, /开工前先问用户/, '缺少开工前的操作模式问题');
+  assert.match(agents, /手动/, '缺少手动模式');
+  assert.match(agents, /自动 loop/, '缺少自动 loop 模式');
+  assert.match(agents, /推荐项/, '没有写清自动 loop 下确认走推荐项');
+});
+
+test('任务页约定要求每一步变化都更新 progress.html，并先问操作模式', () => {
+  const ctx = buildContext({...CONFIG, presets: {prototype: {...CONFIG.presets.prototype, enabled: true}}}, {});
+  const agents = render(loadTemplate('agents'), ctx);
+  assert.match(agents, /每一步变化[\s\S]*更新本页/, 'AGENTS.md 没写每一步都要更新任务页');
+  assert.match(agents, /不许攒到收工/, 'AGENTS.md 没禁止攒进度');
+
+  const readme = render(loadTemplate('prototypeReadme'), ctx);
+  assert.match(readme, /开工前先选操作模式/);
+  assert.match(readme, /每一步变化/);
+});
+
 test('init 计划里的每个生成物都不含空的占位符', () => {
   const config = JSON.parse(JSON.stringify(CONFIG));
   config.presets.prototype.enabled = true;

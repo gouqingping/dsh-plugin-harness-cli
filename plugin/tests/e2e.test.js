@@ -1242,8 +1242,11 @@ test('plans.html：init 生成，列出任务并内嵌文档内容', () => {
 
   const text = fs.readFileSync(path.join(dir, 'plans.html'), 'utf8');
   assert.match(text, /"name":"task-demo"/);
+  assert.match(text, /"page":"prototype\/task-demo\/progress\.html"/);
   assert.match(text, /"proposal":/);
   assert.match(text, /data-plans="1"/);
+  assert.match(text, /data-progress/);
+  assert.match(text, /progress-modal/);
   assert.match(text, /data-collapse/);
   assert.match(text, /harnessStartConversation/);
   assert.doesNotMatch(text, /\bconfirm\(|\balert\(/);
@@ -1273,6 +1276,22 @@ test('plans --serve：删除 / 重跑 / 保存 三个动作都落盘', async () 
     const page = await getText(server.port, '/');
     assert.strictEqual(page.status, 200);
     assert.match(page.text, /任务总览/);
+    assert.match(page.text, /data-progress/);
+    assert.match(page.text, /"page":"prototype\/task-demo\/progress\.html"/);
+
+    // 点击任务名加载的任务页必须能直接从服务取到
+    const progressPage = await getText(server.port, '/prototype/task-demo/progress.html');
+    assert.strictEqual(progressPage.status, 200);
+    assert.match(progressPage.text, /data-task="task-demo"/);
+
+    // 总览页每次请求都重新读取任务页：Agent 改了 progress.html，刷新总览就能看到
+    const taskPageFile = path.join(dir, 'prototype/task-demo/progress.html');
+    fs.writeFileSync(
+      taskPageFile,
+      fs.readFileSync(taskPageFile, 'utf8').replace('data-task-status="进行中"', 'data-task-status="待验收"')
+    );
+    const fresh = await getText(server.port, '/');
+    assert.match(fresh.text, /待验收/);
 
     const ui = await getText(server.port, '/prototype/task-demo/ui/index.html');
     assert.strictEqual(ui.status, 200);
