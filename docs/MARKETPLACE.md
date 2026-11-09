@@ -26,9 +26,9 @@
 | GitHub 公开仓库 | ✅ | <https://github.com/gouqingping/dsh-plugin-harness-cli>（`origin`；master 与远端一致） |
 | GitHub topic `dsh-plugin` | ✅ | 另加 `deepseek-harness` / `harness-engineering` / `agents-md` |
 | 根 `package.json` | ✅ | 包名 / 版本 / license / `repository` 指向本仓库 / `dsh.bundle.patch` |
-| 安装验证 | ✅ | DSH 0.2.2-rc.1：`dsh plugin --profile markettest add dsh-plugin-harness-cli` 装上 `0.1.0`，profile 的 `dsh.profile.bundles` 自动追加本包，`dsh --profile markettest --dump-config` 出现 `- id: harness-cli` 行，装完 11 个 `harness_cli_*` 工具随即注册进运行中的 DSH |
+| 安装验证 | ✅ | DSH 0.2.2-rc.1：`dsh plugin --profile markettest add dsh-plugin-harness-cli` 装上 `0.1.0`，profile 的 `dsh.profile.bundles` 自动追加本包，`dsh --profile markettest --dump-config` 出现 `- id: harness-cli` 行，装完 11 个 `harness_cli_*` 工具随即注册进运行中的 DSH；`0.1.1` 已在本机 desktop profile 重装，CLI 输出版本 0.1.1（运行中的 DSH 重启后加载新模板） |
 | 收录 Issue | ✅ | <https://github.com/dshplugin/dsh-plugin-hub/issues/661>（已补评论把安装命令升级成 npm 一键安装） |
-| NPM 发布 | ✅ | [`dsh-plugin-harness-cli@0.1.0`](https://www.npmjs.com/package/dsh-plugin-harness-cli)，`dist-tags.latest` 指向 0.1.0 |
+| NPM 发布 | ✅ | [`dsh-plugin-harness-cli@0.1.1`](https://www.npmjs.com/package/dsh-plugin-harness-cli)，`dist-tags.latest` 指向 0.1.1 |
 
 > 发布时踩到的两个 npm 现状（下次发版照做即可）：
 > - 带 bypass-2FA 的 granular token 已经**不能**直接发布/暂存（`403 You may not perform that action with these credentials`）。
@@ -63,11 +63,11 @@ Development & Operations (dev)
 
 ### Install command
 
-dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
+dsh plugin --profile web add dsh-plugin-harness-cli
 
 ### npm package
 
-none (not published yet; the name `dsh-plugin-harness-cli` is reserved for an upcoming publish, and `repository` in package.json already points at this repo so the entry can bind to the npm package once it exists)
+[`dsh-plugin-harness-cli@0.1.1`](https://www.npmjs.com/package/dsh-plugin-harness-cli)
 
 ### License
 
@@ -89,18 +89,18 @@ CC0-1.0
 - [x] repository in package.json matches this owner/repo.
 ```
 
-## 四、发布 NPM（已发布 0.1.0，发新版本的步骤）
+## 四、发布 NPM（已发布 0.1.1，发新版本的步骤）
 
 ```sh
 npm login              # 必须交互式登录：bypass-2FA token 已不能直接发布
 npm pack --dry-run     # 先看内容：2542 个文件、约 12.8 MB tar / 42 MB 解包
-npm publish            # 会打开 web auth 完成 2FA；PUT 202 后等 2–3 分钟才出现在 registry
+npm publish            # 会打开 web auth 完成 2FA；PUT 202 后先进入 Validating，审核通过才出现在 registry
 ```
 
 `dist-tags.latest` 确认：
 
 ```sh
-npm view dsh-plugin-harness-cli dist-tags   # { latest: '0.1.0' }
+npm view dsh-plugin-harness-cli dist-tags   # { latest: '0.1.1' }
 ```
 
 注意：`files` 里带 `plugin/vendor`（约 48 MB，含离线 yapf/isort/commitlint），发布包会比较大，

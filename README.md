@@ -8,7 +8,7 @@
 ## 安装（DSH 插件市场）
 
 ```sh
-# 已发布到 npm（0.1.0），也是 DSH 插件中心用的命令
+# 已发布到 npm（0.1.1），也是 DSH 插件中心用的命令
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
