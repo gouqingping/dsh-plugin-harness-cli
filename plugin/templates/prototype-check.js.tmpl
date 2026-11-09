@@ -16,9 +16,12 @@
  *   P9 进度记录：最后一条的 data-total 必须等于当前总进度，时间可解析且递增
  *   P10 任务状态：进行中 / 待验收 / 完成；完成与待验收要求全部步骤 100%
  *   P11 汇总页 prototype/progress.html 必须与各任务页一致（过期就报错，提示 --sync）
+ *   P25 进度写入：data-pct > 0 的步骤，最后一条 data-step 记录必须与当前百分比一致
+ *       （强制用 progress 命令写，手改页面 / 只改百分比会被判失败）
  *   P13 DDD 领域模型：限界上下文 + 统一语言 ≥3 条 + 聚合 ≥1 + 不变量 ≥1，不许留待填
  *   P14 SDD 契约：≥2 条、编号 S-01 形式且唯一、编号/契约/输入/输出/错误语义/验收标准六格都要填
  *   P15 TDD：每条用例挂在存在的契约上、每条契约至少一条用例、红/绿状态合法、完成时全部为绿
+ *       验证步骤统一为模拟环境沙箱测试；用例正文仍写「真机验证」直接失败
  *   P16 任务规划的每一步都要 data-spec 指向存在的契约
  *   P17 每个任务在 docs/specs/<任务>/ 下都有 proposal / spec / design / tasks 四份文档且不留待填
  *   P18 文档与页面一致：tasks.md 的步骤数与标题、spec.md 的契约编号集合都要对得上
@@ -193,11 +196,17 @@ function parsePage(html) {
     cells: [...m[2].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => textOf(c[1])),
   }));
 
-  const log = [...html.matchAll(/<li[^>]*data-at="([^"]*)"[^>]*data-total="([^"]*)"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => ({
-    at: m[1],
-    total: Number(m[2]),
-    text: textOf(m[3]),
-  }));
+  const log = [...html.matchAll(/<li[^>]*data-at="([^"]*)"[^>]*data-total="([^"]*)"([^>]*)>([\s\S]*?)<\/li>/g)].map((m) => {
+    const step = /data-step="([^"]*)"/.exec(m[3]);
+    const pct = /data-pct="([^"]*)"/.exec(m[3]);
+    return {
+      at: m[1],
+      total: Number(m[2]),
+      step: step ? Number(step[1]) : null,
+      pct: pct ? Number(pct[1]) : null,
+      text: textOf(m[4]),
+    };
+  });
 
   const updatedMatch = /<time[^>]*data-updated[^>]*datetime="([^"]*)"/.exec(html) || /data-updated[^>]*datetime="([^"]*)"/.exec(html);
   const declaredMatch = /data-total-pct[^>]*>([^<]*)</.exec(html);
@@ -340,6 +349,13 @@ function checkTdd(page, label) {
     if (!['red', 'green'].includes(item.tdd)) {
       add('P15', 'error', `${label} 用例 ${item.id} 的 data-tdd 必须是 red 或 green（现在是 ${item.tdd === null ? '缺失' : item.tdd}）`);
     }
+    if (/真机/.test(item.text || '')) {
+      add(
+        'P15',
+        'error',
+        `${label} 用例 ${item.id} 仍写「真机验证」：TDD 验证步骤统一改为「模拟环境沙箱测试」（写清入口 / 数据 / 命令 / 断言）`
+      );
+    }
   }
   for (const id of specs) {
     if (!cases.some((item) => item.spec === id)) {
@@ -435,6 +451,30 @@ function checkTask(name, html, page) {
     }
   }
 
+  // P25：步骤进度必须能追溯到 progress 命令写下的记录。
+  // 手改 data-pct、或只改页面不跑 progress，都会在这里被挡住。
+  const lastStepLog = new Map();
+  for (const entry of page.log) {
+    if (Number.isInteger(entry.step) && entry.step >= 1) lastStepLog.set(entry.step, entry);
+  }
+  for (const step of page.steps) {
+    if (!Number.isFinite(step.pct) || step.pct <= 0) continue;
+    const entry = lastStepLog.get(step.no);
+    if (!entry) {
+      add(
+        'P25',
+        'error',
+        `${label} 第 ${step.no} 步是 ${step.pct}%，但没有 data-step="${step.no}" 的进度记录：只能跑 dsh-plugin-harness-cli progress 写进度`
+      );
+    } else if (entry.pct !== step.pct) {
+      add(
+        'P25',
+        'error',
+        `${label} 第 ${step.no} 步是 ${step.pct}%，但最后一条记录是 ${entry.pct === null ? '缺失 data-pct' : entry.pct + '%'}：手改页面不算，重跑 progress 同步记录`
+      );
+    }
+  }
+
   if (!STATUSES.includes(page.status)) {
     add('P10', 'error', `${label} 的 data-task-status 是 ${page.status === null ? '缺失' : page.status}，只能是：${STATUSES.join(' / ')}`);
   } else if ((page.status === '完成' || page.status === '待验收') && page.steps.some((s) => s.pct !== 100)) {
@@ -497,6 +537,21 @@ function checkPlan(name, page, base) {
   }
 
   if (!started) return;
+
+  // P26：已经开工的任务，最后一条进度记录必须晚于方案确认时间。
+  // 这挡住“先写进度、后补确认”和“手改页面但记录还是建页时那条”的假进度。
+  if (status === '已确认') {
+    const confirmedAt = Date.parse(attr(html, 'data-confirmed-at'));
+    const lastLog = page.log[page.log.length - 1];
+    const lastAt = lastLog ? Date.parse(lastLog.at) : NaN;
+    if (Number.isFinite(confirmedAt) && (!Number.isFinite(lastAt) || lastAt < confirmedAt)) {
+      add(
+        'P26',
+        'error',
+        `${label} 已开工，但最后一条进度记录早于方案确认（确认 ${attr(html, 'data-confirmed-at')}）：用 progress 重新写一次进度`
+      );
+    }
+  }
 
   // 已开工：文档必须还是「确认时那一版」，且复盘已通过
   const docsDir = path.join(ROOT, SPECS, name);

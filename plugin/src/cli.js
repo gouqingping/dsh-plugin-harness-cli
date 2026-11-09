@@ -819,7 +819,8 @@ function cmdProgress(root, flags) {
   const note =
     String(flags.note || '').trim() ||
     (pct !== undefined ? `步骤 ${stepNo} → ${pct}%（总进度 ${total}%）` : `状态 → ${status}`);
-  const entry = `<li data-at="${now}" data-total="${total}">${agent ? `[${agent}] ` : ''}${note
+  const stepAttrs = pct !== undefined ? ` data-step="${stepNo}" data-pct="${pct}"` : '';
+  const entry = `<li data-at="${now}" data-total="${total}"${stepAttrs}>${agent ? `[${agent}] ` : ''}${note
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')}</li>`;

@@ -53,15 +53,25 @@ test('AGENTS.md 开工前先问操作模式，并写明自动 loop 的确认口�
   assert.match(agents, /推荐项/, '没有写清自动 loop 下确认走推荐项');
 });
 
-test('任务页约定要求每一步变化都更新 progress.html，并先问操作模式', () => {
+test('任务页约定要求每一步变化都跑 progress，并先问操作模式', () => {
   const ctx = buildContext({...CONFIG, presets: {prototype: {...CONFIG.presets.prototype, enabled: true}}}, {});
   const agents = render(loadTemplate('agents'), ctx);
-  assert.match(agents, /每一步变化[\s\S]*更新本页/, 'AGENTS.md 没写每一步都要更新任务页');
+  assert.match(agents, /每一步变化[\s\S]*dsh-plugin-harness-cli progress/, 'AGENTS.md 没写每一步都要跑 progress');
   assert.match(agents, /不许攒到收工/, 'AGENTS.md 没禁止攒进度');
 
   const readme = render(loadTemplate('prototypeReadme'), ctx);
   assert.match(readme, /开工前先选操作模式/);
   assert.match(readme, /每一步变化/);
+});
+
+test('TDD 验证步骤统一为模拟环境沙箱测试，不再要求真机', () => {
+  const config = {...CONFIG, presets: {prototype: {...CONFIG.presets.prototype, enabled: true}}};
+  const ctx = buildContext(config, {task: 'task-demo'});
+  for (const key of ['progressHtml', 'prototypeReadme', 'agents']) {
+    const text = render(loadTemplate(key), ctx);
+    assert.match(text, /模拟环境沙箱测试/, `${key} 没写模拟环境沙箱测试`);
+    assert.doesNotMatch(text, /真机/, `${key} 仍在要求真机验证`);
+  }
 });
 
 test('init 计划里的每个生成物都不含空的占位符', () => {

@@ -65,7 +65,7 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 | 2 契约（SDD） | 每条行为：输入 → 输出 + 错误语义 + 验收标准，≥2 条 | `<tr data-spec="S-01">` 六列 |
 | 3 测试（TDD） | 每条用例挂在契约上，先红后绿；每条契约至少一条用例 | `<li class="case" data-case data-spec data-tdd>` |
 | 4 任务规划 | 步骤编号 1..N 连续，每步绑定契约 | `<li class="step" data-step data-spec>` + `.step-pct[data-pct]` |
-| 5 进度记录 | 每一步变化立刻追加一条，最后一条的总进度 = 当前汇总 | `<li data-at data-total>` |
+| 5 进度记录 | 每一步变化立刻追加一条，最后一条的总进度 = 当前汇总 | `<li data-at data-total>`；progress 写入的步骤记录另带 `data-step` / `data-pct` |
 
 ### DDD：先把边界画出来
 
@@ -89,7 +89,8 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 
 - 每条用例 `data-case="T-01"`（唯一）、`data-spec` 指向契约、`data-tdd="red|green"`。
 - **先写 red**，实现到 green 才允许改；任务标「完成」时不允许还有 red。
-- 每条契约至少一条用例；用例正文写清跑什么命令、断言什么。
+- 每条契约至少一条用例；验证步骤统一在**模拟环境沙箱**执行，写清环境入口、准备数据、命令与断言。
+- 不写设备上的手工验证步骤；P15 会拒绝旧写法。
 
 ### 任务规划：编号连续、可人工调整
 
@@ -98,8 +99,10 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 
 ### 进度记录：每一步变化都要立刻留痕
 
-- 追加 `<li data-at="2026-11-06T10:20:00+08:00" data-total="40">…</li>`，只加不删。
+- 追加 `<li data-at="2026-11-06T10:20:00+08:00" data-total="40">…</li>`，只加不删；`progress` 写步骤时会自动带上 `data-step="N" data-pct="X"`。
 - 最后一条的 `data-total` 必须等于当前汇总；否则判失败（P9）。
+- `data-pct > 0` 的每一步，都必须有对应的 `data-step` 记录且百分比一致；手改页面判失败（P25）。
+- 已开工任务的最后一条记录必须晚于方案确认时间（P26）。
 
 ## UI 设计稿：`{{prototypeDir}}/<任务>/ui/`
 
@@ -141,7 +144,7 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 | P11 | 总览页与任务页一致 | error |
 | P13 | DDD 领域段完整（上下文 / ≥3 术语 / 聚合 / 不变量） | error |
 | P14 | SDD 契约 ≥2 条、编号合法唯一、六格都填 | error |
-| P15 | TDD：用例挂契约、契约有用例、红/绿合法、完成时全绿 | error |
+| P15 | TDD：用例挂契约、契约有用例、红/绿合法、完成时全绿；验证步骤必须是模拟环境沙箱测试 | error |
 | P16 | 每个规划步骤都绑定存在的契约 | error |
 | P17 | `docs/specs/<任务>/` 四份文档齐全且不留占位 | error |
 | P18 | 文档与页面一致（步骤数/标题、契约编号集合） | error |
@@ -151,6 +154,8 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 | P22 | 确认后 `docs/specs` 指纹不得变化，且复盘「已通过」 | error |
 | P23 | 有设计稿时 `design.md` 必须有 UI 摘要块且指纹一致（跑 `ui` 同步） | error |
 | P24 | 有 `docs/wiki` 时 `proposal.md` 必须有业务背景块且指纹一致（跑 `wiki` 同步） | error |
+| P25 | 有百分比的步骤必须有对应的 `data-step` 记录且数值一致（进度只能由 `progress` 写入） | error |
+| P26 | 已开工任务最后一条进度记录必须晚于方案确认时间 | error |
 
 新建的页面是骨架（含「待填」占位），**填完 DDD / SDD / TDD 与规划后 check 才会通过**——这是故意的。
 
@@ -161,7 +166,7 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 | 任务发起 | 复制 `{{prototypeTemplate}}` 建页：先写 DDD 边界，再写 ≥2 条契约与失败用例 |
 | 写完一条契约 | 补它的输入 / 输出 / 错误语义 / 验收标准，并补至少一条 red 用例 |
 | 用例转绿 | `data-tdd` 改 `green`，写清跑的什么命令 |
-| 每一步变化（开始 / 完成 / 阻塞 / 改规划） | 立刻改该步 `data-pct`、追加一条进度记录、跑 `--sync`；每一步都写，不攒到收工 |
+| 每一步变化（开始 / 完成 / 阻塞 / 改规划） | 立刻跑 `dsh-plugin-harness-cli progress <任务> --step N --pct X`；它改页面、追加 `data-step` 记录并同步总览，不攒到收工 |
 | 范围 / 方案变化 | 改契约与规划步骤，不另开页面；编号保持稳定 |
 | 任务收口 | 全部步骤 100%、状态改「完成」（或「待验收」）、用例全绿、`--sync` |
 

@@ -276,9 +276,63 @@ function readBody(req) {
  */
 function servePlans(root, config, port) {
   const rootAbs = path.resolve(root);
+  const events = new Set();
+  let lastSignature = '';
+  let poller = null;
+
+  const taskSignature = (tasks) =>
+    tasks.map((task) => [task.name, task.total, task.status, task.updated, task.hasUi].join('|')).join('\n');
+  const eventBody = (tasks) => `data: ${JSON.stringify({tasks, generatedAt: new Date().toISOString()})}\n\n`;
+  const broadcast = (force) => {
+    const tasks = collectTasks(rootAbs, config);
+    const signature = taskSignature(tasks);
+    if (!force && signature === lastSignature) return;
+    lastSignature = signature;
+    const body = eventBody(tasks);
+    for (const client of events) {
+      try {
+        client.write(body);
+      } catch (err) {
+        events.delete(client);
+      }
+    }
+  };
+  const cleanup = () => {
+    if (poller !== null) clearInterval(poller);
+    poller = null;
+    for (const client of events) {
+      try {
+        client.end();
+      } catch (err) {
+        // 连接可能已被客户端关闭，忽略
+      }
+    }
+    events.clear();
+  };
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = decodeURIComponent(url.pathname);
+
+    if (req.method === 'GET' && pathname === '/api/tasks') {
+      return sendJson(res, 200, {tasks: collectTasks(rootAbs, config), generatedAt: new Date().toISOString()});
+    }
+
+    if (req.method === 'GET' && pathname === '/api/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write('retry: 2000\n\n');
+      const tasks = collectTasks(rootAbs, config);
+      lastSignature = taskSignature(tasks);
+      res.write(eventBody(tasks));
+      events.add(res);
+      res.on('close', () => events.delete(res));
+      return;
+    }
 
     if (req.method === 'POST' && pathname.startsWith('/api/')) {
       let payload;
@@ -321,7 +375,10 @@ function servePlans(root, config, port) {
       return sendJson(res, 403, {error: '越界访问'});
     }
     let content;
+    let stat;
     try {
+      stat = fs.statSync(target);
+      if (!stat.isFile()) return sendJson(res, 404, {error: `找不到 ${rel}`});
       content = fs.readFileSync(target);
     } catch (err) {
       return sendJson(res, 404, {error: `找不到 ${rel}`});
@@ -329,18 +386,32 @@ function servePlans(root, config, port) {
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(target).toLowerCase()] || 'application/octet-stream',
       'Cache-Control': 'no-store',
+      'Content-Length': stat.size,
+      ETag: `"${Math.floor(stat.mtimeMs).toString(16)}-${stat.size.toString(16)}"`,
+      'Last-Modified': stat.mtime.toUTCString(),
     });
     res.end(content);
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
+    server.once('error', (err) => {
+      cleanup();
+      reject(err);
+    });
     server.listen(port, '127.0.0.1', () => {
       const actual = server.address().port;
+      poller = setInterval(() => {
+        if (events.size > 0) broadcast(false);
+      }, 1000);
+      if (typeof poller.unref === 'function') poller.unref();
       resolve({
         port: actual,
         server,
-        close: () => new Promise((done) => server.close(done)),
+        close: () =>
+          new Promise((done) => {
+            cleanup();
+            server.close(done);
+          }),
       });
     });
   });

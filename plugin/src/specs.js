@@ -262,7 +262,7 @@ function renderPageSections(model) {
       return (
         `<li class="case" data-case="T-${String(index + 1).padStart(2, '0')}" data-spec="${escapeHtml(contract.id)}" ` +
         `data-step="${stepNo}" data-tdd="red">should_${escapeHtml(contract.title)}_when_条件成立 · ` +
-        `<code>命令见 spec.md 验收标准</code></li>`
+        `<code>模拟环境沙箱测试命令见 spec.md 验收标准</code></li>`
       );
     })
     .join('\n      ');
@@ -279,7 +279,7 @@ function renderPageSections(model) {
         '        <dl>',
         `          <dt>落地契约</dt><dd>${escapeHtml(step.spec)}</dd>`,
         '          <dt>改动落点</dt><dd>—</dd>',
-        '          <dt>验证结果</dt><dd>待跑</dd>',
+        '          <dt>沙箱测试结果</dt><dd>待跑</dd>',
         '        </dl>',
         '      </li>',
       ].join('\n');

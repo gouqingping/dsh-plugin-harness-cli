@@ -7,7 +7,7 @@
       "JavaScript"
     ],
     "runtime": "Node.js >= 18（零运行时依赖）",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "paths": {
     "agents": "AGENTS.md",

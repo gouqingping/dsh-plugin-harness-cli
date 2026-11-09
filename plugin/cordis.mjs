@@ -22,7 +22,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {execFile, spawn} from 'node:child_process';
 import http from 'node:http';
+import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
+
+const require = createRequire(import.meta.url);
+const {createTodoBridge} = require('./src/todo-bridge.js');
 
 /** Cordis 插件标识（与 `cordis.patch.yml` 里的 `id` 对应）。 */
 export const name = 'harness-cli';
@@ -1222,6 +1226,22 @@ export function apply(ctx) {
   for (const spec of TOOL_SPECS) ctx.tools.register(buildTool(spec));
   if (typeof ctx.inject === 'function') ctx.inject(['commands'], (scoped) => registerCommands(scoped));
   else if (ctx.commands !== undefined) registerCommands(ctx);
+
+  // DSH 的 todo_write 每次写 `todo/write` 会话事件；这里把它桥到任务页进度。
+  // 事件处理是幂等的：只有 todo 状态与页面百分比不同才调用 progress。
+  if (typeof ctx.on === 'function') {
+    const bridge = createTodoBridge();
+    ctx.on('session/event', (session, event) => {
+      return bridge.handle(session, event).then((result) => {
+        if (result && result.ok === false && !result.skipped) {
+          const message = `[harness-cli] DSH todo 同步失败：${result.error || '未知错误'}`;
+          if (ctx.logger && typeof ctx.logger.warn === 'function') ctx.logger.warn(message);
+          else console.warn(message);
+        }
+        return result;
+      });
+    });
+  }
 }
 
 export {parseCommandInput, parseTaskInput, resolveRoot, runCli, TOOL_SPECS, COMMAND_MANUAL, buildHelpText};

@@ -1,6 +1,6 @@
 # 项目知识库（docs/wiki）
 
-> 本项目（Harness 工程化配置工具，版本 0.1.1）的**业务向**说明集合：给领导、售前、客户、实施、产品、测试看，
+> 本项目（Harness 工程化配置工具，版本 0.1.2）的**业务向**说明集合：给领导、售前、客户、实施、产品、测试看，
 > 不要求懂代码。技术用法在 [`../../README.md`](../../README.md)，安装与卸载在 [`../../README-INSTALL.md`](../../README-INSTALL.md)，
 > 设计取舍在 [`../adr/ADR-0001-harness-cli.md`](../adr/ADR-0001-harness-cli.md)。
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-harness-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH 插件：把「项目怎么协作」变成可生成、可校验的文件 —— AGENTS.md / 任务页 / 规范文档 / 门禁 / 业务 wiki，模型可直接调用。",
   "main": "plugin/cordis.mjs",
   "exports": {

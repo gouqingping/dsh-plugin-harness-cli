@@ -66,8 +66,10 @@
     </div>
     <div class="bar"><div class="fill" data-total-bar></div></div>
     <p class="note">
-      总进度由任务规划的步骤百分比等权汇总，不手填；改完运行 <code>node {{prototypeCheck}}</code> 校验，
-      再用 <code>--sync</code> 刷新 <a href="../../{{prototypeDir}}/{{prototypeIndex}}">总览页</a>。
+      总进度由任务规划的步骤百分比等权汇总，不手填。步骤进度只能通过
+      <code>dsh-plugin-harness-cli progress &lt;任务名&gt; --step N --pct X</code> 写入；
+      它会追加记录并同步 <a href="../../{{prototypeDir}}/{{prototypeIndex}}">总览页</a>，
+      再跑 <code>node {{prototypeCheck}}</code> 校验。
     </p>
   </section>
 
@@ -127,13 +129,14 @@
     <p class="note">
       每条用例挂在一条契约上（<code>data-spec</code>），并标注红/绿（<code>data-tdd</code>）：
       先 <code>red</code> 再实现到 <code>green</code>；每条契约至少一条用例。
+      验证步骤统一写「模拟环境沙箱测试」：写清沙箱入口 / 准备数据 / 执行命令 / 断言。
     </p>
     <ul class="case-list" data-cases>
       <li class="case" data-case="T-01" data-spec="S-01" data-step="1" data-tdd="red">
-        should_&lt;行为&gt;_when_&lt;条件&gt; · <code>待填：跑它的命令</code>
+        should_&lt;行为&gt;_when_&lt;条件&gt; · <code>待填：模拟环境沙箱测试命令</code>
       </li>
       <li class="case" data-case="T-02" data-spec="S-02" data-step="2" data-tdd="red">
-        should_&lt;行为&gt;_when_&lt;条件&gt; · <code>待填：跑它的命令</code>
+        should_&lt;行为&gt;_when_&lt;条件&gt; · <code>待填：模拟环境沙箱测试命令</code>
       </li>
     </ul>
   </section>
@@ -154,7 +157,7 @@
         <dl>
           <dt>落地契约</dt><dd>S-01</dd>
           <dt>改动落点</dt><dd>—</dd>
-          <dt>验证结果</dt><dd>待跑</dd>
+          <dt>沙箱测试结果</dt><dd>待跑</dd>
         </dl>
       </li>
       <li class="step" data-step="2" data-spec="S-02">
@@ -166,7 +169,7 @@
         <dl>
           <dt>落地契约</dt><dd>S-02</dd>
           <dt>改动落点</dt><dd>—</dd>
-          <dt>验证结果</dt><dd>待跑</dd>
+          <dt>沙箱测试结果</dt><dd>待跑</dd>
         </dl>
       </li>
       <li class="step" data-step="3" data-spec="S-02">
@@ -178,7 +181,7 @@
         <dl>
           <dt>落地契约</dt><dd>S-02</dd>
           <dt>改动落点</dt><dd>—</dd>
-          <dt>验证结果</dt><dd>待跑</dd>
+          <dt>沙箱测试结果</dt><dd>待跑</dd>
         </dl>
       </li>
     </ol>
@@ -188,7 +191,8 @@
     <h2>5. 进度记录（每一步变化追加一行）</h2>
     <p class="note">
       只追加不删：<code>data-at</code> 是变化时间，<code>data-total</code> 是变化后的总进度，
-      必须与页面汇总值一致。
+      必须与页面汇总值一致；由 progress 写入的步骤记录还带 <code>data-step</code> /
+      <code>data-pct</code>，P25 会用它们核对页面百分比。
     </p>
     <ul class="log-list" data-log>
       <li data-at="{{todayIso}}" data-total="0">建页：DDD / SDD / TDD 骨架就位，总进度 0%</li>
@@ -227,6 +231,22 @@
 
   var state = document.querySelector('[data-overall-state]');
   if (state) state.textContent = total === 100 ? 'done' : total > 0 ? 'in_progress' : 'pending';
+})();
+</script>
+<script>
+(function () {
+  if (!/^https?:$/.test(location.protocol)) return;
+  var last = null;
+  function check() {
+    fetch(location.href, {method: 'HEAD', cache: 'no-store'}).then(function (res) {
+      if (!res.ok) return;
+      var stamp = [res.headers.get('ETag'), res.headers.get('Last-Modified')].filter(Boolean).join('|');
+      if (stamp && last !== null && stamp !== last) { location.reload(); return; }
+      if (stamp) last = stamp;
+    }).catch(function () {});
+  }
+  setTimeout(check, 1200);
+  setInterval(check, 3000);
 })();
 </script>
 </body>

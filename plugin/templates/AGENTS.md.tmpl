@@ -39,9 +39,9 @@
 {{#if prototype.enabled}}### 5.1 任务进度页（进度的唯一入口）
 
 - 一个任务一页：`{{prototype.dir}}/<kebab-case 任务名>/{{prototypePage}}`，从 `{{prototype.dir}}/{{prototypeTemplate}}` 复制。
-- **每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻更新本页并同步总览**，不许攒到收工再补；只改步骤百分比（`.step-pct` 的 `data-pct`），总进度由页面内联脚本等权汇总回写，**不手填**。
+- **每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻跑一次 `dsh-plugin-harness-cli progress <任务名> --step N --pct X`**，不许攒到收工再补；它会更新步骤、追加 `data-step` 记录并同步总览。**不要手改任务页，也不要手填总进度**（P25 / P26 会判失败）。
 - 自动 loop 下，所有确认都走推荐项：复盘通过且文档指纹未变才确认；有风险时取保守项，并把「自动 loop」写进进度记录。
-- 收口才到 100%：真机未验收、回归没跑完时保留「待验收」步。
+- 收口才到 100%：模拟环境沙箱测试未通过、回归没跑完时保留「待验收」步。
 - 与 `docs/current.md` 同一轮更新；目录数上限 {{prototype.keep}}，超了跑 `node {{paths.prototypeCheck}} --prune`。
 
 {{/if}}{{#if claims.enabled}}### 5.2 并行 loop（认领）

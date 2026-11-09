@@ -177,13 +177,14 @@ function buildContext(config, opts = {}) {
 
   if (proto.enabled) {
     conventions.push(
-      `任务进度页 ${proto.dir}/{kebab-case 任务名}/${proto.progressPage}：只改进度页里的步骤百分比，总进度由页面脚本汇总。`
+      `任务进度页 ${proto.dir}/{kebab-case 任务名}/${proto.progressPage}：进度只能跑 \`dsh-plugin-harness-cli progress\` 写入，不要手改页面或手填总进度。`
     );
-    forbidden.push('不手填进度页总进度，不写假百分比：真机未验收、回归没跑完时不标 100%。');
+    forbidden.push('不手改进度页的步骤百分比：进度必须由 progress 命令写入，并留下 data-step 记录。');
+    forbidden.push('不手填进度页总进度，不写假百分比：模拟环境沙箱测试未通过、回归没跑完时不标 100%。');
     forbidden.push(
       `不把新任务追加进旧进度页，也不让 ${proto.dir}/ 超过 ${proto.keep} 个任务目录。`
     );
-    dod.push('任务进度页已更新，且总进度 = 各步骤百分比等权汇总。');
+    dod.push('任务进度页已用 progress 更新，且每一步都有对应的 data-step 记录（P25）。');
     dod.push(`\`node ${paths.prototypeCheck}\` 通过（目录数 / 进度一致性 / 与 docs 一致）。`);
   }
 

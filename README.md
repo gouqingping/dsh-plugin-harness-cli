@@ -8,7 +8,7 @@
 ## 安装（DSH 插件市场）
 
 ```sh
-# 已发布到 npm（0.1.1），也是 DSH 插件中心用的命令
+# npm 最新发布 0.1.1；仓库当前版本 0.1.2（未发布），也是 DSH 插件中心用的安装命令
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
@@ -114,7 +114,7 @@ common-agent/                    ← 工作区里的项目目录
 | `ui [任务名] [--user-words "原话"] [--force]` | 生成 antd 风格 UI 设计稿、同步 `design.md`，并把「设计说明缺口」列成清单；斜杠命令会自动发起补全 | 0 / 1 / 2 |
 | `check [--strict] [--json]` | 只读校验；`--strict` 让警告也算失败 | 0 / 1 / 2 |
 | `doctor [--json]` | 工具自检：Node 版本、模板、配置、可写、是否 git 仓库、python3 | 0 / 2 |
-| `plans [--serve] [--port 7788]` | 根目录 `plans.html`：任务总览（**点任务名弹窗看 `progress.html`** / 展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘 | 0 / 2 |
+| `plans [--serve] [--port 7788]` | 根目录 `plans.html`：任务总览（**点任务名弹窗看 `progress.html`** / 展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
 | `wiki [--update\|--keep\|--ask] [--check] [--dry-run]` | 生成 / 更新 `docs/wiki`（13 篇业务文档），并同步每个任务 `proposal.md` 的业务背景区块 | 0 / 1 / 2 |
 | `style <参数...>` | 把参数原样转给随包的 `harness-style`（代码风格 / 提交信息） | 透传 |
 
@@ -170,7 +170,7 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
 - **P1xx**（preset）任务页：目录数上限、任务名合法（字母/数字/中文/_-）、规划编号连续、步骤百分比一致、
   `100%` 与「待验收」互斥、进度记录末条 = 汇总、总览页与任务页一致
 - **P13–P16** 拆规范：DDD 四段齐全（上下文 / 统一语言 ≥3 / 聚合 / 不变量）、
-  SDD 契约 ≥2 条且六格都填、TDD 每条契约至少一条用例且红绿合法、每步绑定契约
+  SDD 契约 ≥2 条且六格都填、TDD 每条契约至少一条用例且红绿合法、验证步骤为模拟环境沙箱测试、每步绑定契约
 - **P20** UI 设计稿：必须是 antd v5 风格（设计令牌 + 组件），同目录说明写清组件清单 / 状态 / 契约；
   混入第二套设计体系判失败；没有设计稿只警告
 - **P21** 方案确认：每个任务必须有 `plan.html` 且七节齐全；已有进度或状态不是「进行中」时，方案必须「已确认」
@@ -178,6 +178,8 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
   （人改文档后必须重新复盘 + 重新确认，不允许边改边跑）
 - **P23** UI 同步：有 `ui/index.html` 时，`design.md` 必须有 UI 摘要块且指纹一致（改设计稿后跑 `ui` 同步）
 - **P24** 业务同步：有 `docs/wiki` 时，`proposal.md` 必须有业务背景块且指纹一致（改 wiki 后跑 `wiki` 同步）
+- **P25** 进度写入：`data-pct > 0` 的每一步都必须有 `data-step` 记录且百分比一致；手改页面判失败
+- **P26** 进度及时：已开工任务的最后一条进度记录必须晚于方案确认时间
 - **P17–P19** 文档归纳：`docs/specs/<task>/` 四份文档齐全不留待填、
   `tasks.md` 与页面步骤一致、`spec.md` 与页面契约编号一致、`design.md` 含 DDD 四段
 
@@ -210,6 +212,7 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
 1. **DDD 划边界**：限界上下文、统一语言（≥3 条）、聚合/实体、不变量；
 2. **SDD 定契约**：每条行为写成 `S-01` 起的六格契约（编号 / 契约 / 输入 / 输出 / 错误语义 / 验收标准），≥2 条；
 3. **TDD 保质量**：每条用例挂在一条契约上，先 `red` 再 `green`，每条契约至少一条用例；
+   验证步骤统一在模拟环境沙箱执行（入口 / 数据 / 命令 / 断言），不写真机验证步骤；
 4. **任务规划**：编号 1..N 的步骤（可人工增删），每步绑定一条契约；
 5. **进度记录**：每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻追加一条并更新任务页，
    不攒到收工；末条总进度必须等于汇总。
@@ -227,7 +230,7 @@ docs/specs/<task>/proposal.md           为什么做 / 范围 / 非目标 / 验�
 docs/specs/<task>/spec.md               契约 S-01、S-02…（SDD）
 docs/specs/<task>/design.md             限界上下文 / 统一语言 / 聚合 / 不变量（DDD）
 docs/specs/<task>/tasks.md              任务规划 1..N，每步标注落地的契约
-scripts/prototype-check.js              门禁：P1–P19（见 §5）
+scripts/prototype-check.js              门禁：P1–P26（见 §5）
 ```
 
 用法：
@@ -378,11 +381,15 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 | `harness_cli_doctor` | `doctor` | 否（工具自检） | 0 / 2 |
 | `harness_cli_style` | `style` | 由透传参数决定 | 透传 |
 
+另外，插件会订阅 DSH 的 `session/event`：顶层会话每次写 `todo/write`，就按 todo 标题匹配当前任务页步骤，
+把 `completed` / `in_progress` / `pending` 自动映射成 `100%` / `50%` / `0%`，再调用 `progress` 落盘。
+方案未确认、任务不唯一或步骤匹配不到时跳过，不绕过 P21/P22 的确认链；同一会话的事件串行处理。
+
 以及十条斜杠命令：`/harness-cli-check [root] [--strict]`、`/harness-cli-init [root] [--preset prototype] [--force] [--dry-run]`
 （**默认启用任务页能力**）、`/harness-cli-review [任务名]`、`/harness-cli-plan [任务名] [--confirm --by "人"]`、
 `/harness-cli-progress <任务名> --step N --pct X`、`/harness-cli-ui [任务名] [--force]`、
 `/harness-cli-wiki [root] [--update|--keep|--check]`、`/harness-cli-doctor [root]`、
-`/harness-cli-plans [--serve] [--port 7788] [--stop]`（任务总览：起本机服务后，点任务名弹窗看详细进度，按钮可直接删除 / 重跑 / 保存）、
+`/harness-cli-plans [--serve] [--port 7788] [--stop]`（任务总览：起本机服务后，点任务名弹窗看详细进度，列表通过 SSE 实时更新，按钮可直接删除 / 重跑 / 保存）、
 `/harness-cli-help [命令或工具名]`（一次看全所有工具与命令的用法）。
 
 两个宿主细节写在 `cordis.mjs` 顶部：DSH 桌面端是 Electron，所以子进程要带

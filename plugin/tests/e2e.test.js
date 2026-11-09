@@ -12,6 +12,7 @@ const os = require('os');
 const path = require('path');
 const {execFileSync, spawn} = require('child_process');
 const http = require('http');
+const {syncTodoWrite} = require('../src/todo-bridge.js');
 
 const BIN = path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js');
 
@@ -726,6 +727,8 @@ test('plan：创建任务时把 docs/specs 四份文档一次补全', () => {
   const page = fs.readFileSync(path.join(dir, 'prototype/task-demo/progress.html'), 'utf8');
   assert.match(page, /data-spec="S-01"/);
   assert.match(page, /data-case="T-01"/);
+  assert.match(page, /模拟环境沙箱测试/);
+  assert.doesNotMatch(page, /真机/);
   assert.strictEqual((page.match(/class="step"/g) || []).length, 4, '默认规划 4 步');
 
   // 内容补全后，复盘应直接通过
@@ -812,6 +815,7 @@ test('progress：确认后改步骤/状态，自动追加记录并同步总览',
 
   const html = fs.readFileSync(path.join(dir, 'prototype/task-demo/progress.html'), 'utf8');
   assert.match(html, /data-pct="100">100%/);
+  assert.match(html, /data-step="1" data-pct="100"/);
   assert.match(html, /第 1 步完成/);
   assert.match(html, /data-total="33"/);
   assert.match(fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8'), /data-task="task-demo" data-total="33"/);
@@ -850,6 +854,33 @@ test('progress：中文任务名可用', () => {
     fs.readFileSync(path.join(dir, 'prototype/登录页面/progress.html'), 'utf8'),
     /data-pct="50">50%/
   );
+});
+
+test('DSH todo/write：completed / in_progress 自动落盘为 100% / 50%', async () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'task-demo', '--root', dir], dir);
+  fillTask(dir, 'task-demo');
+  reviewAndConfirm(dir, 'task-demo');
+
+  const result = await syncTodoWrite({
+    root: dir,
+    todos: [
+      {content: '写契约与失败用例', status: 'completed'},
+      {content: '实现账号与会话', status: 'in_progress'},
+      {content: '回归与文档', status: 'pending'},
+    ],
+  });
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+
+  const html = fs.readFileSync(path.join(dir, 'prototype/task-demo/progress.html'), 'utf8');
+  assert.match(html, /data-pct="100">100%/);
+  assert.match(html, /data-pct="50">50%/);
+  assert.match(html, /data-step="1" data-pct="100"/);
+  assert.match(html, /data-step="2" data-pct="50"/);
+  assert.match(html, /DSH todo/);
+
+  const check = run(['check', '--root', dir], dir);
+  assert.strictEqual(check.code, 0, check.out);
 });
 
 test('preset prototype：新建页是骨架，check 要求把 DDD / SDD / TDD 与文档填完', () => {
@@ -906,6 +937,53 @@ test('任务页：进度记录末条与汇总不一致被判失败（P9）', () 
   assert.match(res.out, /P9/);
 });
 
+test('任务页：手改进度但没有 progress 的 data-step 记录被判失败（P25）', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'task-demo', '--root', dir], dir);
+  fillTask(dir, 'task-demo');
+  reviewAndConfirm(dir, 'task-demo');
+  assert.strictEqual(run(['progress', 'task-demo', '--step', '1', '--pct', '100', '--root', dir], dir).code, 0);
+
+  const file = path.join(dir, 'prototype/task-demo/progress.html');
+  const now = new Date().toISOString();
+  const html = fs
+    .readFileSync(file, 'utf8')
+    .replace('data-pct="0">0%</span>', 'data-pct="50">50%</span>')
+    .replace(
+      '</ul>\n  </section>\n</main>',
+      `<li data-at="${now}" data-total="50">手改第 2 步，但没有 progress 记录</li>\n    </ul>\n  </section>\n</main>`
+    );
+  fs.writeFileSync(file, html);
+
+  const res = run(['check', '--root', dir], dir);
+  assert.strictEqual(res.code, 1);
+  assert.match(res.out, /P25[\s\S]*第 2 步/);
+});
+
+test('任务页：进度记录早于方案确认被判失败（P26）', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'task-demo', '--root', dir], dir);
+  fillTask(dir, 'task-demo');
+  reviewAndConfirm(dir, 'task-demo');
+
+  const planFile = path.join(dir, 'prototype/task-demo/plan.html');
+  const confirmedAt = /data-confirmed-at="([^"]*)"/.exec(fs.readFileSync(planFile, 'utf8'))[1];
+  const before = new Date(Date.parse(confirmedAt) - 1000).toISOString();
+  const file = path.join(dir, 'prototype/task-demo/progress.html');
+  const html = fs
+    .readFileSync(file, 'utf8')
+    .replace('data-pct="0">0%</span>', 'data-pct="100">100%</span>')
+    .replace(
+      '</ul>\n  </section>\n</main>',
+      `<li data-at="${before}" data-total="33" data-step="1" data-pct="100">确认前就写了进度</li>\n    </ul>\n  </section>\n</main>`
+    );
+  fs.writeFileSync(file, html);
+
+  const res = run(['check', '--root', dir], dir);
+  assert.strictEqual(res.code, 1);
+  assert.match(res.out, /P26/);
+});
+
 test('总览页：过期被判失败，--sync 之后通过（P11）', () => {
   const dir = repo(['--preset', 'prototype']);
   run(['page', 'task-demo', '--root', dir], dir);
@@ -918,7 +996,10 @@ test('总览页：过期被判失败，--sync 之后通过（P11）', () => {
     file,
     fs.readFileSync(file, 'utf8')
       .replace('data-pct="0">0%</span>', 'data-pct="100">100%</span>')
-      .replace('</ul>\n  </section>\n</main>', `<li data-at="${now}" data-total="33">第 1 步完成，33%</li>\n    </ul>\n  </section>\n</main>`)
+      .replace(
+        '</ul>\n  </section>\n</main>',
+        `<li data-at="${now}" data-total="33" data-step="1" data-pct="100">第 1 步完成，33%</li>\n    </ul>\n  </section>\n</main>`
+      )
   );
 
   const stale = run(['check', '--root', dir], dir);
@@ -981,6 +1062,23 @@ test('TDD：契约没有用例 / 完成时还有 red 会被判失败（P15）', 
   const res = run(['check', '--root', dir], dir);
   assert.strictEqual(res.code, 1);
   assert.match(res.out, /P15[\s\S]*S-02 没有测试用例/);
+});
+
+test('TDD：用例仍写「真机验证」被判失败（P15）', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'task-demo', '--root', dir], dir);
+  fillTask(dir, 'task-demo');
+
+  const file = path.join(dir, 'prototype/task-demo/progress.html');
+  const html = fs.readFileSync(file, 'utf8').replace(
+    /<li class="case" data-case="T-01"[\s\S]*?<\/li>/,
+    '<li class="case" data-case="T-01" data-spec="S-01" data-step="1" data-tdd="green">真机验证：按人工步骤操作</li>'
+  );
+  fs.writeFileSync(file, html);
+
+  const res = run(['check', '--root', dir], dir);
+  assert.strictEqual(res.code, 1);
+  assert.match(res.out, /P15[\s\S]*模拟环境沙箱测试/);
 });
 
 test('规划：步骤没有绑定契约会被判失败（P16）', () => {
@@ -1229,10 +1327,52 @@ function getText(port, pathname) {
     http.get({host: '127.0.0.1', port, path: pathname}, (res) => {
       let text = '';
       res.on('data', (chunk) => { text += chunk; });
-      res.on('end', () => resolve({status: res.statusCode, text}));
+      res.on('end', () => resolve({status: res.statusCode, text, headers: res.headers}));
     }).on('error', reject);
   });
 }
+
+/** 读指定数量的 SSE data 事件；首条到达后执行 onFirst，用于验证后续推送。 */
+function getSseEvents(port, pathname, count, onFirst) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      req.destroy();
+      reject(new Error('SSE timeout'));
+    }, 6000);
+    timer.unref();
+    const req = http.get({host: '127.0.0.1', port, path: pathname}, (res) => {
+      let buffer = '';
+      const events = [];
+      let fired = false;
+      res.on('data', (chunk) => {
+        buffer += chunk.toString();
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          boundary = buffer.indexOf('\n\n');
+          const match = /(?:^|\n)data: ([^\n]*)(?:\n|$)/.exec(block);
+          if (!match) continue;
+          events.push(JSON.parse(match[1]));
+          if (!fired && events.length === 1) {
+            fired = true;
+            if (onFirst) onFirst();
+          }
+          if (events.length >= count) {
+            clearTimeout(timer);
+            req.destroy();
+            resolve({status: res.statusCode, type: String(res.headers['content-type']), events});
+            return;
+          }
+        }
+      });
+    });
+    req.on('error', (err) => {
+      if (err.code !== 'ECONNRESET') reject(err);
+    });
+  });
+}
+
 test('plans.html：init 生成，列出任务并内嵌文档内容', () => {
   const dir = repo(['--preset', 'prototype']);
   assert.ok(fs.existsSync(path.join(dir, 'plans.html')), 'init should create plans.html');
@@ -1249,6 +1389,8 @@ test('plans.html：init 生成，列出任务并内嵌文档内容', () => {
   assert.match(text, /progress-modal/);
   assert.match(text, /data-collapse/);
   assert.match(text, /harnessStartConversation/);
+  assert.match(text, /EventSource/);
+  assert.match(text, /live-state/);
   assert.doesNotMatch(text, /\bconfirm\(|\balert\(/);
 });
 
@@ -1279,17 +1421,29 @@ test('plans --serve：删除 / 重跑 / 保存 三个动作都落盘', async () 
     assert.match(page.text, /data-progress/);
     assert.match(page.text, /"page":"prototype\/task-demo\/progress\.html"/);
 
+    const feed = await getText(server.port, '/api/tasks');
+    assert.strictEqual(feed.status, 200);
+    assert.strictEqual(JSON.parse(feed.text).tasks[0].name, 'task-demo');
+
+    // 首帧之后改任务页，服务应通过 SSE 主动推送变化，而不是等客户端刷新。
+    const taskPageFile = path.join(dir, 'prototype/task-demo/progress.html');
+    const pushed = await getSseEvents(server.port, '/api/events', 2, () => {
+      const text = fs.readFileSync(taskPageFile, 'utf8');
+      fs.writeFileSync(taskPageFile, text.replace(/data-task-status="[^"]*"/, 'data-task-status="待验收"'));
+    });
+    assert.strictEqual(pushed.status, 200);
+    assert.match(pushed.type, /^text\/event-stream/);
+    assert.strictEqual(pushed.events[0].tasks[0].name, 'task-demo');
+    assert.strictEqual(pushed.events[1].tasks[0].status, '待验收');
+
     // 点击任务名加载的任务页必须能直接从服务取到
     const progressPage = await getText(server.port, '/prototype/task-demo/progress.html');
     assert.strictEqual(progressPage.status, 200);
     assert.match(progressPage.text, /data-task="task-demo"/);
+    assert.match(progressPage.headers.etag, /^"[0-9a-f]+-[0-9a-f]+"$/);
+    assert.ok(progressPage.headers['last-modified'], '任务页应返回 Last-Modified 供自刷新判断');
 
     // 总览页每次请求都重新读取任务页：Agent 改了 progress.html，刷新总览就能看到
-    const taskPageFile = path.join(dir, 'prototype/task-demo/progress.html');
-    fs.writeFileSync(
-      taskPageFile,
-      fs.readFileSync(taskPageFile, 'utf8').replace('data-task-status="进行中"', 'data-task-status="待验收"')
-    );
     const fresh = await getText(server.port, '/');
     assert.match(fresh.text, /待验收/);
 

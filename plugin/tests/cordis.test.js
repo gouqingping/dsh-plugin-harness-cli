@@ -27,6 +27,7 @@ function fakeExec(cwd) {
 function fakeCtx() {
   const tools = [];
   const commands = [];
+  const events = [];
   const ctx = {
     tools: {
       register(definition) {
@@ -45,8 +46,12 @@ function fakeCtx() {
       callback(ctx);
       return () => {};
     },
+    on(name, handler) {
+      events.push({name, handler});
+      return () => {};
+    },
   };
-  return {ctx, tools, commands};
+  return {ctx, tools, commands, events};
 }
 
 test('模块导出 cordis 插件契约', async () => {
@@ -93,6 +98,20 @@ test('apply 注册 5 个工具与 3 个斜杠命令', async () => {
       'harness-cli-wiki',
     ]
   );
+});
+
+test('apply 订阅 session/event，todo/write 没有仓库配置时安全跳过', async () => {
+  const mod = await import('../cordis.mjs');
+  const {ctx, events} = fakeCtx();
+  mod.apply(ctx);
+
+  const registration = events.find((item) => item.name === 'session/event');
+  assert.ok(registration, '应订阅 session/event');
+  const result = await registration.handler(
+    {id: 'session-1', header: {cwd: tmpRepo()}},
+    {type: 'todo/write', data: {todos: [{content: '一步', status: 'completed'}]}}
+  );
+  assert.deepStrictEqual(result, {ok: true, skipped: 'no-harness-config'});
 });
 
 test('每个工具都是 object 根 schema + 可渲染的输出', async () => {

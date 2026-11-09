@@ -73,7 +73,8 @@
       <h1>{{project.name}} · 任务总览</h1>
       <p class="meta">共 <b id="task-count">{{taskCount}}</b> 个任务 · 由 <code>dsh-plugin-harness-cli plans</code> 生成 · 最后生成：{{nowIso}}</p>
     </div>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span class="tag tag-default" id="live-state">静态快照</span>
       <button class="btn" id="reload">刷新</button>
     </div>
   </header>
@@ -134,6 +135,9 @@
   var ONLINE = location.protocol === 'http:' || location.protocol === 'https:';
   var pendingDelete = null;
   var toastTimer = null;
+  var liveSource = null;
+  var liveReloadTimer = null;
+  var currentProgress = null;
 
   function toast(text, ms) {
     var el = document.getElementById('toast');
@@ -189,6 +193,72 @@
     return 'tag-default';
   }
 
+  function setLive(text, cls) {
+    var el = document.getElementById('live-state');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'tag ' + (cls || 'tag-default');
+  }
+
+  function taskSignature(task) {
+    return [task.name, task.total, task.status, task.updated, task.hasUi].join('|');
+  }
+
+  function rowForName(name) {
+    var rows = document.querySelectorAll('#rows > tr[data-task]');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-task') === name) return rows[i];
+    }
+    return null;
+  }
+
+  function progressCell(total) {
+    return '<span class="progress"><span class="progress-track"><span class="progress-fill" style="width:' +
+      (total || 0) + '%"></span></span><span>' + (total || 0) + '%</span></span>';
+  }
+
+  /** SSE / 轮询拿到的新任务列表：结构不变时只改单元格，避免打断展开与滚动。 */
+  function applyTasks(next) {
+    next = Array.isArray(next) ? next : [];
+    var sameNames = next.length === TASKS.length;
+    if (sameNames) {
+      for (var i = 0; i < next.length; i++) {
+        if (next[i].name !== TASKS[i].name) { sameNames = false; break; }
+      }
+    }
+    var changed = [];
+    var uiChanged = false;
+    if (sameNames) {
+      next.forEach(function (task, index) {
+        var prev = TASKS[index];
+        if (taskSignature(prev) === taskSignature(task)) return;
+        changed.push(task.name);
+        if (Boolean(prev.hasUi) !== Boolean(task.hasUi)) uiChanged = true;
+      });
+    }
+    TASKS = next;
+    document.getElementById('task-count').textContent = String(TASKS.length);
+    if (!sameNames || uiChanged) {
+      render();
+      return;
+    }
+    changed.forEach(function (name) {
+      var task = TASKS.filter(function (item) { return item.name === name; })[0];
+      var row = rowForName(name);
+      if (!task || !row) return;
+      row.children[1].innerHTML = '<span class="tag ' + tagClass(task.status) + '">' + esc(task.status || '进行中') + '</span>';
+      row.children[2].innerHTML = progressCell(task.total);
+      row.children[4].textContent = task.updated || '—';
+    });
+    if (currentProgress && changed.indexOf(currentProgress) !== -1) {
+      clearTimeout(liveReloadTimer);
+      liveReloadTimer = setTimeout(function () {
+        var frame = document.getElementById('progress-frame');
+        if (frame && frame.src && frame.src !== 'about:blank') frame.src = frame.src;
+      }, 250);
+    }
+  }
+
   function rowHtml(task, index) {
     return '<tr data-task="' + esc(task.name) + '">' +
       '<td><button type="button" class="task-link" data-progress="' + index + '" title="查看当前任务详细进度（progress.html）">' + esc(task.name) + '</button></td>' +
@@ -225,10 +295,14 @@
 
   function render() {
     var rows = document.getElementById('rows');
+    var empty = document.getElementById('empty');
+    document.getElementById('task-count').textContent = String(TASKS.length);
     if (TASKS.length === 0) {
-      document.getElementById('empty').style.display = '';
+      rows.innerHTML = '';
+      empty.style.display = '';
       return;
     }
+    empty.style.display = 'none';
     rows.innerHTML = TASKS.map(rowHtml).join('');
   }
 
@@ -274,11 +348,13 @@
     document.getElementById('progress-modal-open').href = url;
     document.getElementById('progress-frame').src = url;
     document.getElementById('progress-modal').classList.add('is-open');
+    currentProgress = task.name;
   }
 
   function closeProgress() {
     document.getElementById('progress-modal').classList.remove('is-open');
     document.getElementById('progress-frame').src = 'about:blank';
+    currentProgress = null;
   }
 
   function post(api, payload) {
@@ -297,6 +373,45 @@
   function finish(message) {
     toast(message, 1500);
     setTimeout(function () { location.reload(); }, 600);
+  }
+
+  function pollLive() {
+    setLive('轮询同步', 'tag-blue');
+    function tick() {
+      fetch('/api/tasks', {cache: 'no-store'})
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          setLive('轮询同步', 'tag-blue');
+          applyTasks(data.tasks || []);
+        })
+        .catch(function () { setLive('同步中断', 'tag-gold'); });
+    }
+    tick();
+    setInterval(tick, 2000);
+  }
+
+  function connectLive() {
+    if (!ONLINE) {
+      setLive('静态快照', 'tag-default');
+      return;
+    }
+    if (typeof EventSource !== 'function') {
+      pollLive();
+      return;
+    }
+    setLive('连接中…', 'tag-gold');
+    liveSource = new EventSource('/api/events');
+    liveSource.onopen = function () { setLive('实时同步', 'tag-green'); };
+    liveSource.onmessage = function (event) {
+      try {
+        var data = JSON.parse(event.data);
+        setLive('实时同步', 'tag-green');
+        applyTasks(data.tasks || []);
+      } catch (err) {
+        setLive('数据异常', 'tag-gold');
+      }
+    };
+    liveSource.onerror = function () { setLive('重连中', 'tag-gold'); };
   }
 
   document.getElementById('reload').addEventListener('click', function () { location.reload(); });
@@ -404,6 +519,7 @@
   });
 
   if (!ONLINE) document.getElementById('offline-tip').style.display = '';
+  connectLive();
   render();
 })();
 </script>
