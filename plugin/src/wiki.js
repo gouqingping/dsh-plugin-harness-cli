@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const {exists, isDir, readIfExists, readJsonIfExists, writeFileSafe, toPosix, toKebab} = require('./util');
+const {exists, isDir, readIfExists, readJsonIfExists, writeFileSafe, toPosix} = require('./util');
 const {loadConfig, resolveConfigFile} = require('./config');
 const {render} = require('./render');
 const {loadTemplate} = require('./templates');
@@ -228,12 +228,16 @@ function topDirs(root, config, skips = []) {
   return out;
 }
 
-/** 用 README 的第一段作项目定位（去掉标题与引用符号）。 */
+/** 用 README 的第一段正文作项目定位（跳过标题、表格、图片与徽章，去掉引用符号）。 */
 function readmeSummary(root) {
   const text = readIfExists(path.join(root, 'README.md')) || '';
-  for (const line of text.split('\n')) {
-    const trimmed = line.replace(/^[#>\-*\s]+/, '').trim();
-    if (trimmed.length >= 8 && !trimmed.startsWith('![') && !trimmed.startsWith('|')) return trimmed;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || /^#{1,6}\s/.test(line)) continue; // 标题不是定位
+    if (/^[|!]/.test(line) || line.startsWith('[![')) continue; // 表格 / 图片 / 徽章
+    const trimmed = line.replace(/^[>\-*\s]+/, '').trim();
+    if (/dsh-plugin-harness-cli|占位|请按实际情况/.test(trimmed)) continue; // 生成器脚手架不是定位
+    if (trimmed.length >= 8 && !/^[|!]/.test(trimmed)) return trimmed;
   }
   return '';
 }
@@ -320,7 +324,7 @@ function collectFacts(root) {
   const wikiFiles = isDir(wikiDir) ? fs.readdirSync(wikiDir).filter((f) => f.endsWith('.md')) : [];
 
   const derivedDirs = (config.dirs || []).length > 0
-    ? (config.dirs || []).map((d) => ({path: d.path, desc: d.desc || d.description || ''}))
+    ? (config.dirs || []).map((d) => ({path: d.path, name: d.name || '', desc: d.desc || d.description || ''}))
     : topDirs(root, config, skips);
   const derivedStack = (config.project.stack || []).length > 0 ? config.project.stack : detectStack(root, hasPkg ? pkg : null, skips);
   const derivedRuntime = config.project.runtime || detectRuntime(root, hasPkg ? pkg : null, skips);
@@ -421,8 +425,9 @@ function collectFacts(root) {
       index: FILES.map((item) => ({name: item.name, title: item.title})),
     },
     domains: derivedDirs
-      .filter((d) => d.path)
-      .map((d) => ({name: path.basename(String(d.path).replace(/\/+$/, '')), path: d.path, desc: d.desc || ''})),
+      // 只给「声明了业务名」的目录生成下钻页：目录名（bin / src）是代码结构，不是业务域
+      .filter((d) => d.path && d.name)
+      .map((d) => ({name: d.name, path: d.path, desc: d.desc || ''})),
     today: new Date().toISOString().slice(0, 10),
     nowIso: new Date().toISOString(),
   };
@@ -438,13 +443,35 @@ function extractBlock(text) {
 
 /** 拼一篇完整文档：标题 + 受管区块 + 人工补充区。 */
 function compose(title, body) {
-  return `# ${title}\n\n${BEGIN}\n${body.trim()}\n${END}\n\n## 人工补充（本区不会被自动覆盖）\n\n- 生成器给不出的人话写在这里；\`--update\` 只重写上面的受管区块。\n`;
+  return `# ${title}\n\n${BEGIN}\n${body.trim()}\n${END}\n\n## 人工补充（本区不会被自动覆盖）\n\n- 生成器给不出的人话写在这里；重新生成只重写上面的受管区块，本区永远保留。\n`;
 }
 
 function replaceBlock(text, body) {
   const begin = text.indexOf(BEGIN);
   const end = text.indexOf(END);
   return `${text.slice(0, begin + BEGIN.length)}\n${body.trim()}\n${text.slice(end)}`;
+}
+
+/**
+ * 接管一篇「没有受管区块」的既有文档：只在标题后插入受管区块，原文一个字都不改。
+ * 这是 `--update` 在旧文档上的安全动作：不覆盖人工内容，只让文件从今以后可被增量更新。
+ * @param {string} title - 文档标题（文件没有一级标题时补上）。
+ * @param {string} body - 受管区块内容。
+ * @param {string} text - 既有文件原文。
+ * @returns {string} 接管后的完整文件内容。
+ */
+function adoptBlock(title, body, text) {
+  const block = `${BEGIN}\n${body.trim()}\n${END}`;
+  const heading = /^#\s[^\n]*\n?/.exec(text);
+  if (heading === null) return `# ${title}\n\n${block}\n\n${text}`;
+  const head = heading[0].endsWith('\n') ? heading[0] : `${heading[0]}\n`;
+  const rest = text.slice(heading[0].length).replace(/^\n+/, '');
+  return `${head}\n${block}\n\n${rest}`;
+}
+
+/** 文件名里不能出现路径分隔符；业务名可以直接当文件名（中文可读）。 */
+function safeName(value) {
+  return String(value || '').replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'domain';
 }
 
 function statePath(root, dir) {
@@ -476,7 +503,28 @@ function planWiki(root, opts = {}) {
     }
     const block = extractBlock(text);
     if (block === null) {
-      entries.push({name, abs, action: 'conflict', body, reason: '文件里没有受管区块（可能是人工写的）'});
+      if (text.includes(BEGIN) || text.includes(END)) {
+        // 只有开始或只有结束标记：补区块会造出第二个区块，只能交给人修
+        entries.push({
+          name,
+          abs,
+          action: 'conflict',
+          body,
+          reason: '受管区块标记不完整（只有开始或只有结束），请手工修好再生成',
+        });
+        return;
+      }
+      // 既有文档没有受管区块：当成「可接管」而不是「不可写」。
+      // --update 会补上区块并保留原文，让这份文件从今以后能被增量更新。
+      entries.push({
+        name,
+        abs,
+        action: 'conflict',
+        adoptable: true,
+        body,
+        reason: '文件里没有受管区块（--update 会补区块，原文保留）',
+        content: adoptBlock(title, body, text),
+      });
       return;
     }
     if (block === body.trim()) {
@@ -502,7 +550,7 @@ function planWiki(root, opts = {}) {
     push(file.name, file.title, render(loadTemplate(file.template), facts));
   }
   for (const domain of facts.domains) {
-    const name = `业务域/${toKebab(domain.name) || 'domain'}.md`;
+    const name = `业务域/${safeName(domain.name)}.md`;
     push(name, `业务域：${domain.name}`, render(loadTemplate('wikiDomain'), {...facts, domain}));
   }
   return {facts, dir, entries, state};
@@ -554,11 +602,17 @@ function applyWiki(root, options = {}) {
         action = 'conflict';
       }
     }
+    // 没有可写内容的冲突（例如区块标记不完整）不能硬写：写盘前先挡一道，
+    // 避免把 undefined 交给写文件，也避免「看起来更新了、其实没修」。
+    if ((action === 'create' || action === 'update') && typeof content !== 'string') {
+      action = 'conflict';
+      entry.reason = entry.reason || '没有可写内容，已跳过';
+    }
     if ((action === 'create' || action === 'update') && !dryRun) {
       writeFileSafe(entry.abs, content);
     }
     if (action === 'create' || action === 'update') applied.push(entry);
-    results.push({name: entry.name, action, reason: entry.reason || ''});
+    results.push({name: entry.name, action, reason: entry.reason || '', adoptable: entry.adoptable === true});
   }
 
   const conflicts = results.filter((r) => r.action === 'conflict');
@@ -585,6 +639,8 @@ function wikiStatus(root, opts = {}) {
     stale: entries.filter((e) => e.action === 'update').map((e) => e.name),
     missing: entries.filter((e) => e.action === 'create').map((e) => e.name),
     conflicts: entries.filter((e) => e.action === 'conflict').map((e) => e.name),
+    // 没有受管区块的既有文档：可被 --update 接管（补区块、原文保留），不算「被改坏」
+    adoptable: entries.filter((e) => e.action === 'conflict' && e.adoptable).map((e) => e.name),
   };
 }
 
@@ -607,7 +663,7 @@ function wikiGaps(root, dir) {
     const text = readIfExists(file);
     if (text === null) return;
     text.split('\n').forEach((line, index) => {
-      if (/待补|（未定义）|未声明/.test(line)) {
+      if (/待补|待业务确认|（未定义）|未声明/.test(line)) {
         gaps.push({file: toPosix(path.relative(root, file)), line: index + 1, text: line.trim()});
       }
     });

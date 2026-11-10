@@ -62,6 +62,9 @@
            padding:10px 16px; border-radius:var(--ant-border-radius-lg); font-size:13px; opacity:0; pointer-events:none;
            transition:opacity .2s; z-index:99; max-width:80vw; }
   #toast.is-on { opacity:1; }
+  .confirm { width:min(460px,92vw); background:#fff; border-radius:var(--ant-border-radius-lg); padding:20px 24px; }
+  .confirm-text { color:var(--ant-color-text-secondary); white-space:pre-line; margin:8px 0 20px; }
+  .confirm-actions { display:flex; justify-content:flex-end; gap:8px; }
   code { background:rgba(0,0,0,.06); border-radius:4px; padding:0 4px; font-size:12px; }
   a { color:var(--ant-color-primary); text-decoration:none; }
 </style>
@@ -125,6 +128,17 @@
   </div>
 </div>
 
+<div class="modal-mask" id="confirm-modal">
+  <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <b id="confirm-title">确认操作</b>
+    <p class="confirm-text" id="confirm-text"></p>
+    <div class="confirm-actions">
+      <button class="btn" id="confirm-cancel">取消</button>
+      <button class="btn btn-danger" id="confirm-ok">确定</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script id="plans-data" type="application/json">{{plansJson}}</script>
@@ -133,11 +147,33 @@
   var DATA = JSON.parse(document.getElementById('plans-data').textContent || '{"tasks":[]}');
   var TASKS = DATA.tasks || [];
   var ONLINE = location.protocol === 'http:' || location.protocol === 'https:';
-  var pendingDelete = null;
   var toastTimer = null;
   var liveSource = null;
   var liveReloadTimer = null;
   var currentProgress = null;
+
+  /** 页面内确认框（不用 window.confirm：嵌在 WebView / iframe 里会被拦）。 */
+  function askConfirm(title, text, okLabel) {
+    return new Promise(function (resolve) {
+      var mask = document.getElementById('confirm-modal');
+      var ok = document.getElementById('confirm-ok');
+      var cancel = document.getElementById('confirm-cancel');
+      document.getElementById('confirm-title').textContent = title;
+      document.getElementById('confirm-text').textContent = text;
+      ok.textContent = okLabel || '确定';
+      mask.classList.add('is-open');
+      function close(value) {
+        mask.classList.remove('is-open');
+        ok.onclick = null;
+        cancel.onclick = null;
+        mask.onclick = null;
+        resolve(value);
+      }
+      ok.onclick = function () { close(true); };
+      cancel.onclick = function () { close(false); };
+      mask.onclick = function (event) { if (event.target === mask) close(false); };
+    });
+  }
 
   function toast(text, ms) {
     var el = document.getElementById('toast');
@@ -475,26 +511,23 @@
       var delTask = taskOf(ds.delete);
       if (!delTask) return;
       if (!ONLINE) {
-        copy('dsh-plugin-harness-cli task delete ' + delTask.name);
+        copy('dsh-plugin-harness-cli delete ' + delTask.name);
         toast('已复制删除命令；或运行 plans --serve 后按钮可直接删除');
         return;
       }
-      if (pendingDelete !== delTask.name) {
-        pendingDelete = delTask.name;
-        target.textContent = '确认删除';
-        target.classList.add('btn-danger');
-        setTimeout(function () {
-          if (pendingDelete === delTask.name) {
-            pendingDelete = null;
-            target.textContent = '删除';
-          }
-        }, 4000);
-        return;
-      }
-      pendingDelete = null;
-      post('delete', {task: delTask.name})
-        .then(function () { finish('已删除「' + delTask.name + '」'); })
-        .catch(function (err) { toast('删除失败：' + err.message, 5000); });
+      // 删除不可逆：用弹窗把「删什么」说清，用户点了「删除」才发请求
+      askConfirm(
+        '删除任务「' + delTask.name + '」？',
+        '会一并删除：任务页、方案页、UI 设计稿、规范文档与复盘。\n' +
+          '目录：prototype/' + delTask.name + '/、docs/specs/' + delTask.name + '/\n' +
+          '此操作无法恢复。',
+        '删除'
+      ).then(function (ok) {
+        if (!ok) return;
+        post('delete', {task: delTask.name})
+          .then(function () { finish('已删除「' + delTask.name + '」'); })
+          .catch(function (err) { toast('删除失败：' + err.message, 5000); });
+      });
       return;
     }
     if (ds.save !== undefined) {

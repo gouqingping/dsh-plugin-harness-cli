@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Harness CLI",
+    "description": "Generates and checks Harness project configuration, and adds a command menu to the composer toolbar."
+  }
+}

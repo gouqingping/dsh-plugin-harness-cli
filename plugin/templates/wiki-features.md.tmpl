@@ -1,52 +1,46 @@
-> 读者：所有人（查询入口）。口径：一条功能点 = 现场人员能完成的一件业务事，或系统按规则自动完成的一件业务事；
-> 同一能力在多个域复用时只在所属域计一次。
+> 读者：所有人（查询入口）。口径：一条功能 = 现场人员能完成的一件业务事，或系统按规则自动完成的一件业务事；
+> 同一能力在多处复用时，只在所属业务域计一次。
 
-## 1. 功能条目（来自功能清单）
+## 1. 功能条目
 
 {{#if features}}
 | 编号 | 名称 | 状态 | 验收条数 | 证据条数 | 依赖 |
 |---|---|---|---:|---:|---:|
-{{#each features}}| `{{id}}` | {{name}} | {{statusText}} | {{acceptance}} | {{evidence}} | {{dependsOn}} |
+{{#each features}}| {{id}} | {{name}} | {{statusText}} | {{acceptance}} | {{evidence}} | {{dependsOn}} |
 {{/each}}
 {{/if}}
 {{#unless features}}
-本仓库还没有功能条目：先跑 `plan <任务名>` 建任务并补全 `{{paths.featureList}}`，本页会自动列出。
+本仓库还没有功能条目。待业务确认：当前要做的范围清单，每条写清做什么、怎么算完成。
 {{/unless}}
 
-## 2. 任务页（来自任务目录）
+## 2. 任务（正在推进的事）
 
 {{#if tasks}}
 | 任务 | 状态 | 总进度 | 步骤数 |
 |---|---|---:|---:|
-{{#each tasks}}| `{{name}}` | {{#if status}}{{status}}{{/if}}{{#unless status}}进行中{{/unless}} | {{total}}% | {{steps}} |
+{{#each tasks}}| {{name}} | {{#if status}}{{status}}{{/if}}{{#unless status}}进行中{{/unless}} | {{total}}% | {{steps}} |
 {{/each}}
 {{/if}}
 {{#unless tasks}}
-还没有任务页：跑 `plan <任务名>`（或 `ui <任务名>`）建第一个任务，本页会自动列出。
+还没有任务：一个任务 = 一次具体推进，会同时产生任务页与规范文档。
 {{/unless}}
 
-## 3. 业务域（按声明目录）
+## 3. 业务划分
 
 {{#if domains}}
 | 业务域 | 目录 | 职责 | 下钻 |
 |---|---|---|---|
-{{#each domains}}| {{name}} | `{{path}}` | {{desc}} | [业务域/{{name}}.md](业务域/{{name}}.md) |
+{{#each domains}}| {{name}} | {{path}} | {{#if desc}}{{desc}}{{/if}}{{#unless desc}}待业务确认{{/unless}} | [业务域/{{name}}.md](业务域/{{name}}.md) |
 {{/each}}
 {{/if}}
 {{#unless domains}}
-还没有可识别的目录：在项目里声明目录地图（`harness-cli.json` 的 `dirs`），或先放入源码目录。
+尚未声明业务划分。待业务确认：本项目分成哪几个业务域、各自负责什么。
 {{/unless}}
 
-## 4. 运行与检查能力
+## 4. 范围边界
 
-| 能力 | 命令 / 位置 |
-|---|---|
-| 测试 | {{#if commands.test}}`{{commands.test}}`{{/if}}{{#unless commands.test}}（未定义）{{/unless}} |
-| Lint | {{#if commands.lint}}`{{commands.lint}}`{{/if}}{{#unless commands.lint}}（未定义）{{/unless}} |
-| 门禁 | {{#if commands.gate}}`{{commands.gate}}`{{/if}}{{#unless commands.gate}}（未定义）{{/unless}} |
-| 并行认领 | {{#if flags.hasClaimScript}}`{{paths.claimScript}}`{{/if}}{{#unless flags.hasClaimScript}}未启用{{/unless}} |
-| 页面校验 | {{#if flags.hasPrototypeCheck}}`{{paths.prototypeCheck}}`{{/if}}{{#unless flags.hasPrototypeCheck}}未启用{{/unless}} |
+待业务确认：本清单明确不包含的能力，以及由其他系统承接的部分。
 
 ## 5. 复用关系
 
-同一能力多处出现时，只在所属域计一次，其他位置用链接指向所属域页面。新增能力时先判断它属于哪个域，再决定是否复用。
+同一能力多处出现时，只在所属业务域计一次，其他位置链接过去，不重复计数。

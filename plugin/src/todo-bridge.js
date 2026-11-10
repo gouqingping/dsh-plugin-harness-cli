@@ -178,13 +178,21 @@ async function syncTodoWrite(options = {}) {
   if (!Array.isArray(todos) || todos.length === 0) return {ok: true, skipped: 'empty-todos'};
 
   const picked = pickTask(root, config, todos);
-  if (picked.error) return {ok: false, skipped: picked.error};
+  if (picked.error) {
+    // 「没有进行中的任务」是常态，不打扰；多个任务匹配不上才需要人介入
+    const ambiguous = /无法唯一匹配/.test(picked.error);
+    return {
+      ok: false,
+      skipped: picked.error,
+      warn: ambiguous
+        ? `DSH todo 无法唯一匹配到任务（${picked.error}）：进度没有写入，先确认当前只推进一个任务或让步骤标题对得上。`
+        : '',
+    };
+  }
   const task = picked.task;
 
-  const planFile = path.join(root, proto.dir || 'prototype', task.name, 'plan.html');
-  if (!/data-plan-status="已确认"/.test(readIfExists(planFile) || '')) {
-    return {ok: false, skipped: 'plan-not-confirmed', task: task.name};
-  }
+  // 方案确认不再是写进度的前置条件：发起任务就能看到进度，
+  // 「方案未确认」由 check 的 P21 在交付前拦，不在记录环节拦。
 
   const updates = mapTodosToSteps(todos, task.steps);
   const applied = [];

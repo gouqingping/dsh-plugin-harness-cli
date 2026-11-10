@@ -96,7 +96,7 @@ test('pickTask：多个进行中任务时用 todo 标题选出唯一任务', () 
   assert.strictEqual(picked.task.name, 'login-flow');
 });
 
-test('syncTodoWrite：只对变化的步骤调 progress，方案未确认时跳过', async () => {
+test('syncTodoWrite：只对变化的步骤调 progress，方案未确认也照常写', async () => {
   const root = makeRepo([{name: 'task-demo', steps: ['写契约与失败用例', '实现账号与会话', '回归与文档']}]);
   const calls = [];
   const result = await syncTodoWrite({
@@ -120,14 +120,19 @@ test('syncTodoWrite：只对变化的步骤调 progress，方案未确认时跳�
     ]
   );
 
+  // 方案未确认不再拦进度：发起任务就能看到进度，P21 交给 check 在交付前拦
   const unconfirmed = makeRepo([{name: 'task-demo', steps: ['写契约与失败用例'], confirmed: false}]);
-  const skipped = await syncTodoWrite({
+  const called = [];
+  const stillWrites = await syncTodoWrite({
     root: unconfirmed,
     todos: [{content: '写契约与失败用例', status: 'completed'}],
-    runner: () => Promise.resolve({ok: true}),
+    runner: (repo, task, update) => {
+      called.push([task, update.step, update.pct]);
+      return Promise.resolve({ok: true});
+    },
   });
-  assert.strictEqual(skipped.ok, false);
-  assert.strictEqual(skipped.skipped, 'plan-not-confirmed');
+  assert.strictEqual(stillWrites.ok, true);
+  assert.deepStrictEqual(called, [['task-demo', 1, 100]]);
 });
 
 test('handleSessionEvent：非 todo / 子会话 / 缺 cwd 都跳过', async () => {

@@ -379,8 +379,8 @@ test('wiki：首次生成 13 篇，二次运行不重复写', () => {
   const dir = repo(['--preset', 'prototype']);
   const first = run(['wiki', '--root', dir], dir);
   assert.strictEqual(first.code, 0, first.out);
-  // 13 篇主文档 + 每个反推出的业务域一页（初始项目里是 scripts/）
-  assert.match(first.out, /已写入 1[34] 篇/);
+  // 13 篇主文档；业务域下钻页只在配置里声明了业务名时才生成
+  assert.match(first.out, /已写入 13 篇/);
 
   for (const file of [
     '一页纸速览.md',
@@ -435,6 +435,101 @@ test('wiki：受管区块外的人工内容不被覆盖', () => {
   const res = run(['wiki', '--update', '--root', dir], dir);
   assert.strictEqual(res.code, 0, res.out);
   assert.match(fs.readFileSync(file, 'utf8'), /人工补充：现场约定 X/);
+});
+
+test('wiki：既有文档没有受管区块时，--update 补区块并原样保留正文', () => {
+  const dir = repo();
+  assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
+  const file = path.join(dir, 'docs/wiki/一页纸速览.md');
+  fs.writeFileSync(file, '# 一页纸速览（人工版）\n\n人工写的第一段。\n\n- 人工要点一\n');
+
+  // 非交互默认模式：不覆盖，但必须如实报告这是「可接管」而不是「已补全」
+  const ask = run(['wiki', '--root', dir], dir);
+  assert.strictEqual(ask.code, 1);
+  assert.match(ask.out, /--update 会补区块/);
+  assert.doesNotMatch(ask.out, /13 篇已按当前仓库补全/);
+  assert.match(fs.readFileSync(file, 'utf8'), /人工写的第一段/);
+
+  const check = run(['wiki', '--check', '--root', dir], dir);
+  assert.match(check.out, /待接管/);
+
+  // --update 接管：补上受管区块，人工正文一个字都不改
+  const update = run(['wiki', '--update', '--root', dir], dir);
+  assert.strictEqual(update.code, 0, `${update.out}${update.err}`);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes('<!-- harness-wiki:begin -->'), '应补上受管区块');
+  assert.match(text, /^# 一页纸速览（人工版）/m);
+  assert.match(text, /人工写的第一段/);
+  assert.match(text, /人工要点一/);
+
+  // 接管后回到正常维护：再跑一次既无冲突、也不重复写
+  const again = run(['wiki', '--root', dir], dir);
+  assert.strictEqual(again.code, 0, again.out);
+  assert.match(again.out, /已写入 0 篇/);
+});
+
+test('wiki：全部文档都没有受管区块时，输出不许说成「已补全」', () => {
+  const dir = repo();
+  assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
+  const wikiDir = path.join(dir, 'docs/wiki');
+  for (const name of fs.readdirSync(wikiDir)) {
+    if (!name.endsWith('.md')) continue;
+    const file = path.join(wikiDir, name);
+    const stripped = fs.readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => !/harness-wiki:(begin|end)/.test(line))
+      .join('\n');
+    fs.writeFileSync(file, stripped);
+  }
+  const res = run(['wiki', '--root', dir], dir);
+  assert.strictEqual(res.code, 1);
+  assert.match(res.out, /没有写入任何文档/);
+  assert.doesNotMatch(res.out, /已按当前仓库补全/);
+});
+
+test('wiki：受管区块标记不完整时不硬写、不崩溃', () => {
+  const dir = repo();
+  assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
+  const file = path.join(dir, 'docs/wiki/术语表.md');
+  const broken = '# 术语表\n\n<!-- harness-wiki:begin -->\n没有结束标记。\n';
+  fs.writeFileSync(file, broken);
+
+  const res = run(['wiki', '--update', '--root', dir], dir);
+  assert.strictEqual(res.code, 1, `${res.out}${res.err}`);
+  assert.doesNotMatch(res.err, /must be of type string/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), broken, '标记不完整的文件不能被改写');
+});
+
+test('wiki：生成物是业务白话，不带代码块、流程图与命令', () => {
+  const dir = repo();
+  assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
+  const wikiDir = path.join(dir, 'docs/wiki');
+  const walk = (base) => {
+    for (const entry of fs.readdirSync(base, {withFileTypes: true})) {
+      const full = path.join(base, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith('.md')) continue;
+      const text = fs.readFileSync(full, 'utf8');
+      assert.doesNotMatch(text, /```/, `${entry.name} 出现代码块`);
+      assert.doesNotMatch(text, /mermaid/i, `${entry.name} 出现流程图语法`);
+      assert.doesNotMatch(text, /\bnode\s+\S+\.js\b/, `${entry.name} 出现命令行`);
+      assert.doesNotMatch(text, /`/, `${entry.name} 出现代码标记`);
+    }
+  };
+  walk(wikiDir);
+});
+
+test('wiki：定位取 README 正文，不把标题当定位', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ca-wiki-pos-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name: 'demo-shop', version: '1.0.0'}));
+  fs.writeFileSync(path.join(dir, 'README.md'), '# Demo Shop\n\n在线商城：下单、支付、退款。\n');
+  assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
+  const overview = fs.readFileSync(path.join(dir, 'docs/wiki/一页纸速览.md'), 'utf8');
+  assert.match(overview, /在线商城：下单、支付、退款/);
+  assert.doesNotMatch(overview, /^\*\*demo-shop\*\*[\s\S]{0,40}\nDemo Shop$/m);
 });
 
 test('wiki --check：缺失报 1，生成后为 0', () => {
@@ -593,7 +688,7 @@ test('plan --confirm：没有复盘时拒绝确认', () => {
   assert.match(res.err, /还没有复盘/);
 });
 
-test('docs 改过之后确认失效：progress 拒绝，check 报 P22', () => {
+test('docs 改过之后确认失效：progress 照常写但提示，check 报 P22', () => {
   const dir = repo(['--preset', 'prototype']);
   run(['page', 'task-demo', '--root', dir], dir);
   fillTask(dir, 'task-demo');
@@ -606,8 +701,8 @@ test('docs 改过之后确认失效：progress 拒绝，check 报 P22', () => {
   fs.appendFileSync(design, '\n- 人工补充：锁定账号 30 分钟。\n');
 
   const res = run(['progress', 'task-demo', '--step', '2', '--pct', '50', '--root', dir], dir);
-  assert.strictEqual(res.code, 1);
-  assert.match(res.err, /在方案确认后被改过/);
+  assert.strictEqual(res.code, 0, res.err);
+  assert.match(res.out, /确认已失效/);
 
   const check = run(['check', '--root', dir], dir);
   assert.match(check.out, /P22/);
@@ -792,13 +887,15 @@ test('plan：建任务时自动生成方案页，默认待确认', () => {
   }
 });
 
-test('progress：方案未确认时拒绝写进度（先确认再开始）', () => {
+test('progress：方案未确认也能记录，只提示 check 仍会红', () => {
   const dir = repo(['--preset', 'prototype']);
   run(['page', 'task-demo', '--root', dir], dir);
 
   const res = run(['progress', 'task-demo', '--step', '1', '--pct', '40', '--root', dir], dir);
-  assert.strictEqual(res.code, 1);
-  assert.match(res.err, /方案未确认/);
+  assert.strictEqual(res.code, 0, res.err);
+  assert.match(res.out, /方案未确认（check 的 P21 仍是红项）/);
+  const html = fs.readFileSync(path.join(dir, 'prototype/task-demo/progress.html'), 'utf8');
+  assert.match(html, /data-pct="40"/);
 });
 
 test('progress：确认后改步骤/状态，自动追加记录并同步总览', () => {
@@ -819,6 +916,51 @@ test('progress：确认后改步骤/状态，自动追加记录并同步总览',
   assert.match(html, /第 1 步完成/);
   assert.match(html, /data-total="33"/);
   assert.match(fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8'), /data-task="task-demo" data-total="33"/);
+});
+
+test('progress：总览同步脚本缺失时先补回，总览仍会更新', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'task-demo', '--root', dir], dir);
+  fillTask(dir, 'task-demo');
+  reviewAndConfirm(dir, 'task-demo');
+
+  const script = path.join(dir, 'scripts/prototype-check.js');
+  fs.rmSync(script);
+  const before = fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8');
+
+  const res = run(['progress', 'task-demo', '--step', '1', '--pct', '100', '--root', dir], dir);
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /总览同步脚本缺失，已按模板补回/);
+  assert.ok(fs.existsSync(script), '应补回同步脚本');
+  const after = fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8');
+  assert.notStrictEqual(after, before, '总览页必须跟着更新');
+  assert.match(after, /data-task="task-demo" data-total="33"/);
+});
+
+test('delete：默认只预演，--yes 才真删，并刷新总览', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'task-demo', '--root', dir], dir);
+
+  const preview = run(['delete', 'task-demo', '--root', dir], dir);
+  assert.strictEqual(preview.code, 1);
+  assert.match(preview.out, /将删除/);
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/task-demo')), '预演不能删文件');
+
+  const done = run(['delete', 'task-demo', '--yes', '--root', dir], dir);
+  assert.strictEqual(done.code, 0, `${done.out}${done.err}`);
+  assert.ok(!fs.existsSync(path.join(dir, 'prototype/task-demo')));
+  assert.ok(!fs.existsSync(path.join(dir, 'docs/specs/task-demo')));
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8'), /task-demo/);
+});
+
+test('delete：任务不存在时报错，不动其他目录', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'keep-me', '--root', dir], dir);
+
+  const res = run(['delete', 'nope', '--yes', '--root', dir], dir);
+  assert.strictEqual(res.code, 1);
+  assert.match(res.err, /不存在/);
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/keep-me')));
 });
 
 test('progress：步骤没到 100% 不能标「完成」', () => {
@@ -1281,9 +1423,9 @@ test('未知 preset 与未知命令返回 2', () => {
 });
 
 /** 起一个 plans 服务（随机端口），返回 {child, port}。 */
-function startPlansServer(dir) {
+function startPlansServer(dir, port = 0) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, 'plans', '--serve', '--port', '0', '--root', dir], {cwd: dir});
+    const child = spawn(process.execPath, [BIN, 'plans', 'serve', String(port), '--root', dir], {cwd: dir});
     let out = '';
     const timer = setTimeout(() => reject(new Error('start timeout: ' + out)), 8000);
     const onData = (chunk) => {
@@ -1291,7 +1433,7 @@ function startPlansServer(dir) {
       const match = /http:\/\/127\.0\.0\.1:(\d+)\//.exec(out);
       if (match) {
         clearTimeout(timer);
-        resolve({child, port: Number(match[1])});
+        resolve({child, port: Number(match[1]), out: () => out});
       }
     };
     child.stdout.on('data', onData);
@@ -1475,15 +1617,11 @@ test('wiki：反推事实时排除 harness-cli 工具与它生成的文件', () 
   assert.strictEqual(run(['init', '--preset', 'prototype', '--root', dir], dir).code, 0);
   assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
 
-  const readme = fs.readFileSync(path.join(dir, 'docs/wiki/README.md'), 'utf8');
-  assert.match(readme, /技术栈 \| Python/);
-  assert.doesNotMatch(readme, /技术栈 \|[^\n]*JavaScript/);
+  const panorama = fs.readFileSync(path.join(dir, 'docs/wiki/系统全景与部署形态.md'), 'utf8');
+  assert.match(panorama, /技术栈 \| Python/);
+  assert.doesNotMatch(panorama, /技术栈 \|[^\n]*JavaScript/);
 
   const features = fs.readFileSync(path.join(dir, 'docs/wiki/功能清单.md'), 'utf8');
   assert.doesNotMatch(features, /dsh-plugin-harness-cli/);
   assert.doesNotMatch(features, /业务域\/dsh-plugin-harness-cli/);
-
-  // 生成物（claim.js / prototype-check.js）也不参与事实反推
-  const stats = fs.readFileSync(path.join(dir, 'docs/wiki/README.md'), 'utf8');
-  assert.doesNotMatch(stats, /测试文件 \| [1-9]/);
 });

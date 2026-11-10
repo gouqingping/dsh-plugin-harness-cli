@@ -161,6 +161,48 @@ function buildReport(run) {
 }
 
 /**
+ * 用宿主的 userQuestions 服务弹选择框，并等用户点选。
+ * 没有可用 UI（子会话、无连接的客户端）时返回 null，调用方退化为非交互行为。
+ * @param {any} ctx - Cordis 上下文。
+ * @param {any} exec - 工具执行上下文（含 agent 与 signal）。
+ * @param {{header: string, question: string, options: Array<{label: string, description?: string}>}} ask - 问题。
+ * @returns {Promise<string|null>} 选中的标签；取消、超时或没有 UI 时 null。
+ */
+async function askChoice(ctx, exec, ask, onError) {
+  const service = ctx && typeof ctx.get === 'function' ? ctx.get('userQuestions') : undefined;
+  if (!service || typeof service.ask !== 'function') return null;
+  try {
+    const answer = await service.ask({
+      questions: [
+        {
+          id: 'harness-cli',
+          header: ask.header,
+          question: ask.question,
+          ...(Array.isArray(ask.options) && ask.options.length > 0
+            ? {options: ask.options.map((item) => ({label: item.label, description: item.description}))}
+            : {}),
+        },
+      ],
+      ...(exec && exec.agent ? {agent: exec.agent} : {}),
+      ...(exec && exec.signal ? {signal: exec.signal} : {}),
+    });
+    const item = (answer && Array.isArray(answer.answers) ? answer.answers : [])
+      .find((entry) => entry && entry.id === 'harness-cli');
+    if (!item) return null;
+    if (Array.isArray(item.selected) && item.selected.length > 0) return item.selected[0];
+    return typeof item.custom === 'string' && item.custom.trim() ? item.custom.trim() : null;
+  } catch (err) {
+    if (typeof onError === 'function') onError(err);
+    return null;
+  }
+}
+
+/** 去掉 wiki 的模式参数，再按用户的选择补一个。 */
+function withWikiMode(argv, mode) {
+  return [...argv.filter((arg) => !['--ask', '--keep', '--update'].includes(arg)), mode];
+}
+
+/**
  * 构造一个模型可调用的工具定义（原生 ToolDefinition，不依赖 `defineTool`，保持零依赖）。
  * @param {object} spec - 工具规格。
  * @param {string} spec.toolName - 模型可见的工具名。
@@ -169,9 +211,12 @@ function buildReport(run) {
  * @param {object} spec.parameters - object 根 JSON Schema。
  * @param {(args: Record<string, unknown>) => string[]} spec.buildArgs - 由参数生成 CLI 参数。
  * @param {number} [spec.timeoutMs] - 子进程超时。
+ * @param {Function} [spec.decide] - 执行前的决策钩子（可弹窗，返回新 argv 或取消）。
+ * @param {Function} [spec.after] - 执行后的决策钩子（例如 wiki 冲突，可带新 argv 重跑）。
+ * @param {any} [ctx] - Cordis 上下文，用于弹窗服务。
  * @returns {object} 可交给 `ctx.tools.register` 的定义。
  */
-function buildTool(spec) {
+function buildTool(spec, ctx) {
   return {
     name: spec.toolName,
     description: spec.description,
@@ -185,12 +230,39 @@ function buildTool(spec) {
       const resolved = resolveRoot(input.root, exec?.agent?.session?.header?.cwd);
       if (resolved.error) throw new Error(resolved.error);
       assertDirectory(resolved.root);
-      const argv = spec.buildArgs(input);
-      const run = await runCli(argv, {
+
+      let argv = spec.buildArgs(input);
+      if (typeof spec.decide === 'function') {
+        const decision = await spec.decide({ctx, exec, input, root: resolved.root, argv});
+        if (decision && decision.cancelled) {
+          return {
+            root: resolved.root,
+            command: spec.command,
+            args: argv,
+            exitCode: 1,
+            ok: false,
+            report: `${decision.report || '已取消'}\n`,
+          };
+        }
+        if (decision && Array.isArray(decision.argv)) argv = decision.argv;
+      }
+
+      let run = await runCli(argv, {
         cwd: resolved.root,
         signal: exec?.signal,
         timeoutMs: spec.timeoutMs,
       });
+      if (typeof spec.after === 'function') {
+        const next = await spec.after({ctx, exec, input, root: resolved.root, argv, run});
+        if (next && Array.isArray(next.argv)) {
+          argv = next.argv;
+          run = await runCli(argv, {
+            cwd: resolved.root,
+            signal: exec?.signal,
+            timeoutMs: spec.timeoutMs,
+          });
+        }
+      }
       return {
         root: resolved.root,
         command: spec.command,
@@ -202,6 +274,28 @@ function buildTool(spec) {
     },
   };
 }
+
+
+/** 覆盖已有文件的确认：force 类操作一律先弹窗，用户点「覆盖」才继续。 */
+async function confirmOverwrite(ctx, exec, what) {
+  const answer = await askChoice(ctx, exec, {
+    header: '覆盖确认',
+    question: `${what} 会覆盖已存在的文件，原内容将被替换。确认继续？`,
+    options: [
+      {label: '覆盖', description: '按本次参数覆盖已存在的文件'},
+      {label: '取消', description: '保留原文件，什么都不做'},
+    ],
+  });
+  // 没有可用 UI 时不改变既有行为（模型已显式要求覆盖）
+  return answer === null ? true : answer === '覆盖';
+}
+
+
+const DELETE_DESCRIPTION =
+  'Delete one task workspace: prototype/<task>/ (progress page, plan, ui design) and docs/specs/<task>/ ' +
+  '(proposal, spec, design, tasks, review), then refresh plans.html and prototype/progress.html. ' +
+  'Irreversible. Without `yes` the tool shows a confirmation dialog; if no dialog is available it refuses ' +
+  'and asks the user to run the CLI with --yes.';
 
 /** 每个工具共用的 `root` 参数。 */
 const ROOT_PROPERTY = {
@@ -241,14 +335,16 @@ const REVIEW_DESCRIPTION =
 const PLAN_DESCRIPTION =
   'Create or confirm the plan page for one task: prototype/<task>/plan.html. The plan states the goal, the ' +
   'approach (DDD boundary + SDD contracts), the page design (when the task has UI), the flow/interaction ' +
-  'design, risks, and acceptance criteria. Confirmation requires a passed review whose fingerprint matches the ' +
-  'current docs/specs/<task>/*.md; after confirmation any document edit invalidates it. Work must not start ' +
-  'before confirmation: `progress` refuses to write and the P21/P22 gates fail.';
+  'design, risks, and acceptance criteria. Confirmation is OPTIONAL and requires a passed review whose ' +
+  'fingerprint matches the current docs/specs/<task>/*.md; after confirmation any document edit invalidates it. ' +
+  'With confirm=true the tool pops a chooser before confirming. Progress does NOT require confirmation: ' +
+  'P21/P22 still fail `check`, but they never block `progress`.';
 
 const PROGRESS_DESCRIPTION =
   'The only write path for task progress. Updates one step percentage (step + pct), and/or the task status ' +
   '(进行中 / 待验收 / 完成), appends a dated progress entry, recomputes the total, and re-syncs ' +
-  'prototype/progress.html. Refuses when the plan is not confirmed (run plan with confirm first). ' +
+  'prototype/progress.html. It always writes, even when the plan is not confirmed: P21/P22 remain `check` ' +
+  'failures to be resolved before delivery, but they never block recording. ' +
   'Every call is recorded, so the page never silently misses a step change.';
 
 const UI_DESCRIPTION =
@@ -261,10 +357,13 @@ const UI_DESCRIPTION =
 const WIKI_DESCRIPTION =
   'Generate or refresh docs/wiki (13 business-facing documents: one-page overview, deployment, roles, flows, ' +
   'feature list, states and rules, conventions, quality gates, acceptance, risks, glossary, manual, README). ' +
+  'The body is plain business language: no commands, code blocks or field names; unknown business facts are ' +
+  'marked "待业务确认" and listed as gaps for you to backfill from the workspace. ' +
   'Scans the repository and writes only the managed block of each file; human text outside it is never touched. ' +
-  'Existing files are updated, missing ones created. When a managed block was edited by hand the run reports a ' +
-  'conflict and exits 1: ask the user, then re-run with mode "auto" (overwrite) or "keep" (keep human text). ' +
-  'mode defaults to "ask"; check=true only reports missing/stale/conflicting files.';
+  'A pre-existing document without a managed block is "adoptable": mode "auto" adds the block and keeps its ' +
+  'original text verbatim; mode "ask" reports it and exits 1. ' +
+  'Domain drill-down pages are only created for dirs that declare a business "name" in the config. ' +
+  'mode defaults to "ask"; check=true only reports missing/stale/adoptable/conflicting files.';
 
 const AGENTS_DESCRIPTION =
   'Regenerate AGENTS.md from harness-cli.json, which is the single source of truth; never hand-edit AGENTS.md. ' +
@@ -338,6 +437,11 @@ const TOOL_SPECS = [
       ...(input.force_state === true ? ['--force-state'] : []),
       ...(input.dry_run === true ? ['--dry-run'] : []),
     ],
+    decide: async ({ctx, exec, input}) => {
+      if (input.force !== true && input.force_state !== true) return null;
+      const ok = await confirmOverwrite(ctx, exec, 'init --force');
+      return ok ? null : {cancelled: true, report: '已取消覆盖：现有文件保持不变'};
+    },
   },
   {
     toolName: 'harness_cli_page',
@@ -378,6 +482,11 @@ const TOOL_SPECS = [
         ...(input.dry_run === true ? ['--dry-run'] : []),
       ];
     },
+    decide: async ({ctx, exec, input}) => {
+      if (input.force !== true) return null;
+      const ok = await confirmOverwrite(ctx, exec, `page ${typeof input.task === 'string' ? input.task : ''}`);
+      return ok ? null : {cancelled: true, report: '已取消覆盖：现有任务页保持不变'};
+    },
   },
   {
     toolName: 'harness_cli_wiki',
@@ -411,6 +520,28 @@ const TOOL_SPECS = [
       ...(input.mode === 'auto' ? ['--update'] : input.mode === 'keep' ? ['--keep'] : ['--ask']),
       ...(input.dry_run === true ? ['--dry-run'] : []),
     ],
+    after: async ({ctx, exec, input, argv, run}) => {
+      // 只有「默认模式遇到冲突」才需要人决策；--dry-run / --check 与显式模式都不打断
+      if (input.check === true || input.dry_run === true) return null;
+      if (input.mode === 'auto' || input.mode === 'keep') return null;
+      const text = `${run.stdout || ''}${run.stderr || ''}`;
+      if (run.exitCode !== 1 || !/待接管|冲突/.test(text)) return null;
+      const answer = await askChoice(ctx, exec, {
+        header: '业务 wiki 冲突',
+        question:
+          'docs/wiki 里有文档没有受管区块，或受管区块被改过。要怎么处理？' +
+          '（接管 = 补区块并原样保留正文；只补缺失 = 完全不动已有文件）',
+        options: [
+          {label: '接管既有文档', description: '补上受管区块，人工正文一字不改，之后可增量更新'},
+          {label: '只补缺失文件', description: '已有文件保持原样，只创建缺的文档'},
+          {label: '取消', description: '什么都不做，退出码保持 1'},
+        ],
+      });
+      if (answer === '接管既有文档') return {argv: withWikiMode(argv, '--update')};
+      if (answer === '只补缺失文件') return {argv: withWikiMode(argv, '--keep')};
+      if (answer === '取消') return null;
+      return null; // 没有 UI：保持退出码 1，让人在命令行决定
+    },
   },
   {
     toolName: 'harness_cli_review',
@@ -448,7 +579,7 @@ const TOOL_SPECS = [
       properties: {
         root: ROOT_PROPERTY,
         task: {type: 'string', description: '任务名（支持中文），与任务页目录一致。'},
-        confirm: {type: 'boolean', description: '把方案标记为「已确认」（需要同时给 by）。'},
+        confirm: {type: 'boolean', description: '把方案标记为「已确认」（会先弹窗让你点选；by 不填则记为「用户（弹窗确认）」）。'},
         by: {type: 'string', description: '确认人（会话/人名），确认时必填。'},
         user_words: {type: 'string', description: '用户原话，写进方案页与提案。'},
         goal: {type: 'string', description: '一句话目标（不填则由原话/任务名推导）。'},
@@ -487,6 +618,35 @@ const TOOL_SPECS = [
         ...(typeof input.input_json === 'string' ? ['--input-json', input.input_json] : []),
         ...(input.dry_run === true ? ['--dry-run'] : []),
       ];
+    },
+    after: async ({exec, input, root, run}) => {
+      if (run.exitCode !== 0 || input.confirm === true || input.dry_run === true) return null;
+      const report = `${run.stdout || ''}${run.stderr || ''}`;
+      const matched = /prototype\/([^/]+)\/plan\.html/.exec(report);
+      const task = (typeof input.task === 'string' && input.task.trim()) || (matched ? matched[1] : '');
+      if (!task) return null;
+      await kickOffPlan({root, task, agent: exec?.agent});
+      return null;
+    },
+    decide: async ({ctx, exec, input, argv}) => {
+      if (input.confirm !== true) return null;
+      const task = typeof input.task === 'string' ? input.task.trim() : '最近的任务';
+      const answer = await askChoice(ctx, exec, {
+        header: '方案确认',
+        question:
+          `确认任务「${task}」的方案？确认后 check 的 P21 才会过；` +
+          '取消则保持未确认，进度照样能记录。',
+        options: [
+          {label: '确认', description: '把方案标记为已确认，并记下当前文档指纹'},
+          {label: '取消', description: '保持未确认；不影响记录进度'},
+        ],
+      });
+      if (answer === null) return null; // 没有 UI：维持原行为（由 by 参数决定）
+      if (answer !== '确认') {
+        return {cancelled: true, report: '已取消方案确认：方案保持未确认，进度不受影响'};
+      }
+      if (typeof input.by === 'string' && input.by.trim().length > 0) return null;
+      return {argv: [...argv, '--by', '用户（弹窗确认）']};
     },
   },
   {
@@ -561,6 +721,56 @@ const TOOL_SPECS = [
         ...(input.force === true ? ['--force'] : []),
         ...(input.dry_run === true ? ['--dry-run'] : []),
       ];
+    },
+    decide: async ({ctx, exec, input}) => {
+      if (input.force !== true) return null;
+      const ok = await confirmOverwrite(ctx, exec, `ui ${typeof input.task === 'string' ? input.task : ''}`);
+      return ok ? null : {cancelled: true, report: '已取消覆盖：现有设计稿保持不变'};
+    },
+  },
+  {
+    toolName: 'harness_cli_delete',
+    command: 'delete',
+    description: DELETE_DESCRIPTION,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['task'],
+      properties: {
+        root: ROOT_PROPERTY,
+        task: {type: 'string', description: '要删除的任务名（支持中文），与任务页目录一致。'},
+        yes: {
+          type: 'boolean',
+          description: '已确认删除。不填会先弹窗让用户选；用户取消则不删。',
+        },
+      },
+    },
+    buildArgs: (input) => {
+      const task = typeof input.task === 'string' ? input.task.trim() : '';
+      if (task.length === 0) throw new Error('`task` 不能为空，例如 "login-flow"');
+      return ['delete', task, ...(input.yes === true ? ['--yes'] : [])];
+    },
+    decide: async ({ctx, exec, input, root}) => {
+      if (input.yes === true) return null;
+      const task = typeof input.task === 'string' ? input.task.trim() : '';
+      const answer = await askChoice(ctx, exec, {
+        header: '删除任务',
+        question:
+          `删除任务「${task}」？会一并删除它的任务页、方案页、UI 设计稿、规范文档与复盘，无法恢复。` +
+          `（目录：prototype/${task}/、docs/specs/${task}/）`,
+        options: [
+          {label: '删除', description: '上述目录一并删除，随后刷新任务总览'},
+          {label: '取消', description: '什么都不做'},
+        ],
+      });
+      if (answer === '删除') return {argv: ['delete', task, '--yes']};
+      return {
+        cancelled: true,
+        report:
+          answer === null
+            ? `没有可用的确认弹窗：请让用户执行 dsh-plugin-harness-cli delete ${task} --yes，或给 yes=true 明确确认`
+            : '已取消删除：任务保持原样',
+      };
     },
   },
   {
@@ -820,30 +1030,43 @@ function parseTaskInput(rawInput) {
  */
 /** 斜杠命令手册：`/harness-cli-help` 的输出来源之一（与注册项保持同名，单测会校验）。 */
 const COMMAND_MANUAL = [
-  {name: 'harness-cli-init', usage: '/harness-cli-init [root] [--force] [--dry-run]', description: '生成 Harness 骨架（默认启用任务页能力）'},
-  {name: 'harness-cli-check', usage: '/harness-cli-check [root] [--strict]', description: '只读校验项目配置与流程证据'},
-  {name: 'harness-cli-review', usage: '/harness-cli-review [任务名] [--agent <标识>]', description: 'Agent 复盘：核对 docs/specs 与任务页，写 review.md（省略任务名=最近的任务）'},
-  {name: 'harness-cli-plan', usage: '/harness-cli-plan [任务名] [--confirm --by "确认人"]', description: '建任务并补全 docs/specs 与页面；确认前必须复盘通过（省略任务名=最近的任务）'},
-  {name: 'harness-cli-progress', usage: '/harness-cli-progress <任务名> --step N --pct 0..100 [--status 进行中|待验收|完成] [--note "说明"]', description: '唯一进度写入口：改步骤/状态 → 追加记录 → 同步总览'},
-  {name: 'harness-cli-ui', usage: '/harness-cli-ui [任务名] [--force]', description: '生成 antd UI 设计稿，有缺口时自动发起「UI 设计补全」对话'},
-  {name: 'harness-cli-wiki', usage: '/harness-cli-wiki [root] [--update|--keep|--check]', description: '生成 docs/wiki，有缺口时自动发起「反推补全」对话'},
-  {name: 'harness-cli-doctor', usage: '/harness-cli-doctor [root]', description: '工具自检：环境 / 模板 / 配置 / 可写 / 风格 / git'},
-  {name: 'harness-cli-plans', usage: '/harness-cli-plans [--serve] [--port 7788] [--stop]', description: '生成 / 打开任务总览 plans.html（--serve 起本机服务，按钮才可直接落盘）'},
-  {name: 'harness-cli-help', usage: '/harness-cli-help [命令或工具名]', description: '查看所有工具与斜杠命令的用法'},
+  {
+    name: 'harness-cli',
+    usage: '/harness-cli [子指令] [参数...]',
+    description: 'Harness 指令总入口：省略子指令时弹窗选择；也可直接写子指令名',
+  },
+];
+
+/** 聚合指令的子指令菜单：中文标签 → 子指令名（对应内部 leaf 定义）。 */
+const SUBCOMMANDS = [
+  {label: '初始化', sub: 'init'},
+  {label: '校验', sub: 'check'},
+  {label: '自检', sub: 'doctor'},
+  {label: '建任务', sub: 'page'},
+  {label: '方案', sub: 'plan'},
+  {label: '复盘', sub: 'review'},
+  {label: '推进度', sub: 'progress'},
+  {label: 'UI 设计', sub: 'ui'},
+  {label: '删除任务', sub: 'delete'},
+  {label: '业务 wiki', sub: 'wiki'},
+  {label: '任务总览', sub: 'plans'},
+  {label: '入口地图', sub: 'agents'},
+  {label: '帮助', sub: 'help'},
 ];
 
 /** 任务标准流程（帮助里反复用到，单独一份）。 */
 const WORKFLOW_TEXT = [
   '任务标准流程（顺序不能颠倒）：',
   '  0. 开工前先问用户：手动（每步等确认）还是自动 loop（自动推进、所有确认 / 选择走推荐项）',
-  '  1. /harness-cli-init                    生成骨架（默认带任务页能力）',
-  '  2. /harness-cli-ui <任务>               建任务页 + 四份规范文档 + 方案页；需要界面时生成 antd 设计稿',
+  '  1. /harness-cli init                    生成骨架（默认带任务页能力）',
+  '  2. /harness-cli ui <任务>               建任务页 + 四份规范文档 + 方案页；需要界面时生成 antd 设计稿',
   '  3. 人改 docs/specs/<任务>/*.md       proposal / spec / design / tasks（可直接改）',
-  '  4. /harness-cli-review <任务>           Agent 复盘：文档与页面一致才通过，写 review.md（含文档指纹）',
-  '  5. /harness-cli-plan <任务> --confirm --by "确认人"   最终确认（复盘通过 + 指纹未变）',
-  '  6. /harness-cli-progress <任务> --step N --pct 0..100 推进度（自动追加记录 + 同步总览）',
-  '  7. /harness-cli-check 或项目门禁 gate.sh             校验 / 交付前门禁',
-  '  8. /harness-cli-plans --serve                         打开总览操作台（删除 / 重跑 / 编辑 / UI 预览）',
+  '  4. /harness-cli review <任务>           Agent 复盘：文档与页面一致才通过，写 review.md（含文档指纹）',
+  '  5. /harness-cli plan <任务> --confirm --by "确认人"   确认方案（可选；确认时弹窗点选，不确认也能记进度）',
+  '  6. /harness-cli progress <任务> --step N --pct 0..100 推进度（自动追加记录 + 同步总览；P21 交给 check 在交付前拦）',
+  '  7. /harness-cli check 或项目门禁 gate.sh             校验 / 交付前门禁',
+  '  8. /harness-cli plans --serve                         打开总览操作台（删除 / 重跑 / 编辑 / UI 预览）',
+  '  9. /harness-cli delete <任务>                          删除任务：先弹窗确认再删（不可恢复）',
 ].join('\n');
 
 /**
@@ -933,6 +1156,19 @@ function waitForPlans(port, timeoutMs = 4000) {
   })();
 }
 
+/** 等新的 plans 子进程把自己的 pid 写进状态文件（避免把旧服务当成就绪）。 */
+function waitForPlansPid(root, pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  return (async () => {
+    while (Date.now() < deadline) {
+      const state = readPlansState(root);
+      if (state && state.pid === pid) return true;
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    return false;
+  })();
+}
+
 /** 读取 plans 服务状态（pid / port）。 */
 function readPlansState(root) {
   try {
@@ -942,8 +1178,76 @@ function readPlansState(root) {
   }
 }
 
+/** 从参数或执行结果里取任务名（page/plan 完之后要拿它去问 UI）。 */
+function firstTaskName(rest, text) {
+  const head = String(rest || '').trim().split(/\s+/)[0] || '';
+  if (isValidTaskName(head)) return head;
+  const matched = /prototype\/([^/]+)\/(?:plan|progress)\.html/.exec(String(text || ''));
+  return matched ? matched[1] : '';
+}
+
+/** 与 CLI 的 isTaskName 保持一致：字母/数字/中文开头，只含字母数字中文中划线。 */
+function isValidTaskName(value) {
+  const name = String(value || '').trim();
+  if (name.length === 0 || name.length > 64) return false;
+  if (name.startsWith('.')) return false;
+  return /^[\p{L}\p{N}][\p{L}\p{N}_-]*$/u.test(name);
+}
+
+/**
+ * 后台起一个 plans 服务：端口传 0，由系统分配空闲端口，避免和别人抢 7788。
+ * @returns {Promise<{ok: boolean, port: number}>} 实际监听端口（拿不到就是 0）。
+ */
+async function startPlansDetached(root) {
+  // 测试里不真的起服务（避免残留进程）
+  if (process.env.HARNESS_CLI_NO_AUTO_PLANS === '1') return {ok: true, port: 0};
+  try {
+    const child = spawn(process.execPath, [BIN, 'plans', 'serve', '0', '--root', root], {
+      cwd: root,
+      detached: true,
+      stdio: 'ignore',
+      env: childEnv(),
+    });
+    child.unref();
+    const ok = await waitForPlansPid(root, child.pid);
+    const state = readPlansState(root);
+    return {ok, port: ok && state && Number.isInteger(state.port) ? state.port : 0};
+  } catch (err) {
+    return {ok: false, port: 0};
+  }
+}
+
+/**
+ * plan 成功后自动开工：起操作台 + 在当前对话发起执行回合。
+ * @returns {{plansStarted: boolean, queued: boolean}}
+ */
+async function kickOffPlan({root, task, agent}) {
+  const plans = await startPlansDetached(root);
+  const plansStarted = plans.ok;
+  const plansPort = plans.port;
+  const prompt = [
+    `方案已就绪。现在开始执行任务「${task}」，不要只回复摘要：`,
+    `1. 读 docs/specs/${task}/tasks.md 与 prototype/${task}/plan.html，按 Step 1..N 顺序开工；`,
+    `2. 每完成一步调用 harness_cli_progress（step=N, pct=100）；失败的步骤如实说明原因；`,
+    '3. 需要用户拍板时用 ask_user_question 弹窗，不要自己替用户决定；',
+    '4. 全部步骤完成后跑 harness_cli_check，再汇报结果。',
+  ].join('\n');
+  const queued = enqueueFollowup(agent, 'harness-cli-kickoff', prompt);
+  return {plansStarted, plansPort, queued};
+}
+
 function registerCommands(ctx) {
-  ctx.commands.register({
+  /**
+   * 指令菜单里只保留一条 `harness-cli`：
+   * 宿主没有分组能力，12 条独立指令会把菜单塞满，所以这里只收集定义、不上架，
+   * 由聚合指令按子指令名分发（子指令行为与原来逐条注册时完全一致）。
+   */
+  const leaves = [];
+  const define = (definition) => {
+    leaves.push(definition);
+    return () => {};
+  };
+  define({
     name: 'harness-cli-check',
     description: '只读校验当前仓库的 Harness 配置（AGENTS.md / 四件套 / 单 WIP / 证据）',
     input: {hint: '[root] [--strict]'},
@@ -953,7 +1257,7 @@ function registerCommands(ctx) {
       return runCommand('check', parsed, invocation?.agent?.session?.header?.cwd, invocation?.signal);
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-init',
     description:
       '生成 Harness 骨架（AGENTS.md / 四件套 / 门禁 / 版本说明），默认同时启用任务页与 UI 设计约定；已存在的文件不覆盖',
@@ -961,12 +1265,12 @@ function registerCommands(ctx) {
     handler: async (invocation) => {
       const parsed = parseCommandInput(invocation?.rawInput);
       if (parsed.error) return {kind: 'error', text: parsed.error};
-      // 平台侧默认把任务页能力打开：装完插件就跑 /harness-cli-init 的团队，不应该再手工补 prototype/
+      // 平台侧默认把任务页能力打开：装完插件就跑 /harness-cli init 的团队，不应该再手工补 prototype/
       const withPreset = {...parsed, preset: parsed.preset || 'prototype'};
       return runCommand('init', withPreset, invocation?.agent?.session?.header?.cwd, invocation?.signal);
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-review',
     description: '复盘任务：检查 docs/specs 与任务页，写 review.md（人改文档后必须重新复盘）',
     input: {hint: '[任务名] [--agent <标识>]（省略=最近的任务）'},
@@ -986,7 +1290,7 @@ function registerCommands(ctx) {
       return {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-plan',
     description: '生成 / 确认任务方案页（prototype/<task>/plan.html）：先定方案再开工',
     input: {hint: '[任务名] [--confirm --by "确认人"]（省略=最近的任务）'},
@@ -1005,10 +1309,29 @@ function registerCommands(ctx) {
         ...(typeof parsed.userWords === 'string' ? ['--user-words', parsed.userWords] : []),
       ];
       const run = await runCli(argv, {cwd: resolved.root, signal: invocation?.signal});
-      return {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
+      const report = buildReport(run);
+      if (run.exitCode !== 0 || parsed.confirm === true) {
+        return {kind: run.exitCode === 0 ? 'success' : 'error', text: report};
+      }
+      // plan 生成成功后自动开工：起操作台 + 让 Agent 按步骤执行（A+B）
+      const matched = /prototype\/([^/]+)\/plan\.html/.exec(report);
+      const task = parsed.task || (matched ? matched[1] : '');
+      if (!task) return {kind: 'success', text: report};
+      const kicked = await kickOffPlan({root: resolved.root, task, agent: invocation?.agent});
+      const consoleText = kicked.plansPort
+        ? `已在 http://127.0.0.1:${kicked.plansPort}/ 启动`
+        : kicked.plansStarted
+          ? '已启动'
+          : '启动失败，跑 /harness-cli plans serve';
+      return {
+        kind: 'success',
+        text:
+          `${report}\n自动开工：${kicked.queued ? '已在当前对话发起执行回合' : '未能发起执行回合，请说「开始执行」'}\n` +
+          `操作台：${consoleText}\n`,
+      };
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-progress',
     description: '更新任务进度（唯一写入口）：改步骤百分比 / 状态，自动追加记录并同步总览',
     input: {hint: '<task> [--step N --pct 0..100] [--status 进行中|待验收|完成] [--note "说明"]'},
@@ -1033,7 +1356,7 @@ function registerCommands(ctx) {
       return {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-ui',
     description: '给任务生成 / 更新 UI 设计稿（Ant Design v5 风格，prototype/<task>/ui/）',
     input: {hint: '[任务名] [--user-words "原话"] [--force]（省略=最近的任务）'},
@@ -1076,7 +1399,7 @@ function registerCommands(ctx) {
       return {kind: 'success', text: `${report}\n${prompt}\n`};
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-wiki',
     description: '生成 docs/wiki 并自动发起「反推补全」：推不出的位置交给当前对话继续补，直到 0 缺口',
     input: {hint: '[root] [--update|--keep|--check]'},
@@ -1112,8 +1435,9 @@ function registerCommands(ctx) {
       const prompt = [
         '反推 docs/wiki 并补全（由 /harness-cli-wiki 自动发起，不要只回复摘要）：',
         `1. 读 ${gapsFile ? gapsFile[1] : 'docs/wiki/.harness-wiki-gaps.json'}：本次有 ${gaps[1]} 处无法从仓库直接推导；`,
-        '2. 反推当前工作区（源码 / README / docs/specs / 任务页 / 门禁脚本），直接编辑对应 docs/wiki 文件补全；',
-        '3. 重跑 /harness-cli-wiki，直到输出「仍需人工确认：0 处」为止。',
+        '2. 反推当前工作区（README / 功能清单 / 任务页 / 规范文档 / 业务配置），把「待业务确认」换成事实；',
+        '3. 用业务白话写：不写命令、代码块、字段名与文件路径，技术细节留在项目 README；',
+        '4. 重跑 /harness-cli-wiki，直到输出「仍需人工确认：0 处」为止。',
       ].join('\n');
 
       if (enqueueFollowup(invocation?.agent, 'harness-cli-wiki', prompt)) {
@@ -1122,10 +1446,10 @@ function registerCommands(ctx) {
       return {kind: 'success', text: `${report}\n${prompt}\n`};
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-plans',
-    description: '任务总览 plans.html：--serve 起本机服务（按钮可直接删除 / 重跑 / 保存），--stop 停止',
-    input: {hint: '[--serve] [--port 7788] [--stop]'},
+    description: '任务总览 plans.html：serve [端口] 起本机服务（省略端口=随机安全端口），stop 停止',
+    input: {hint: '[serve [端口] | stop]'},
     handler: async (invocation) => {
       const raw = String(invocation?.rawInput ?? '');
       const tokens = raw.trim().match(/"[^"]*"|'[^']*'|\S+/g) || [];
@@ -1134,12 +1458,16 @@ function registerCommands(ctx) {
       let mode = 'open';
       for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
-        if (token === '--serve') mode = 'serve';
-        else if (token === '--stop') mode = 'stop';
-        else if (token === '--port') {
+        if (token === 'serve' || token === '--serve') {
+          mode = 'serve';
+        } else if (token === 'stop' || token === '--stop') {
+          mode = 'stop';
+        } else if (token === '--port') {
           const value = tokens[++index];
           if (value === undefined) return {kind: 'error', text: '`--port` 缺少取值'};
           port = Number(value);
+        } else if (/^\d+$/.test(token) && mode === 'serve' && port === undefined) {
+          port = Number(token);
         } else if (token === '--root' || token === '-r') {
           const value = tokens[++index];
           if (value === undefined) return {kind: 'error', text: '`--root` 缺少路径参数'};
@@ -1155,7 +1483,7 @@ function registerCommands(ctx) {
       if (ready.error) return {kind: 'error', text: ready.error};
 
       if (mode === 'stop') {
-        const run = await runCli(['plans', '--stop'], {cwd: resolved.root, signal: invocation?.signal});
+        const run = await runCli(['plans', 'stop'], {cwd: resolved.root, signal: invocation?.signal});
         return {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
       }
 
@@ -1164,40 +1492,77 @@ function registerCommands(ctx) {
         return {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
       }
 
-      const target = Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 7788;
-      const state = readPlansState(resolved.root);
-      if (state && state.port === target && (await waitForPlans(target, 500))) {
-        return {
-          kind: 'success',
-          text: `plans 服务已在运行：http://127.0.0.1:${target}/（pid ${state.pid}）\n`,
-        };
-      }
-
+      // 省略端口 = 0：由系统分配空闲端口，避免固定端口被占
+      const target = Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 0;
+      // 强制接管：CLI 的 serve 会先结束上一次的服务、再清掉占用该端口的进程
       const child = spawn(
         process.execPath,
-        [BIN, 'plans', '--serve', '--port', String(target), '--root', resolved.root],
+        [BIN, 'plans', 'serve', String(target), '--root', resolved.root],
         {cwd: resolved.root, detached: true, stdio: 'ignore', env: childEnv()}
       );
       child.unref();
 
-      const ok = await waitForPlans(target);
-      if (!ok) {
+      const ok = await waitForPlansPid(resolved.root, child.pid);
+      const state = readPlansState(resolved.root);
+      if (!ok || !state || !Number.isInteger(state.port)) {
         return {
           kind: 'error',
           text:
-            `plans 服务没能在端口 ${target} 上启动（可能被占用，或启动失败）。\n` +
-            `换端口：/harness-cli-plans --serve --port 7789；看错误：在项目里跑 dsh-plugin-harness-cli plans --serve --port ${target}\n`,
+            `plans 服务没能在端口 ${target === 0 ? '（随机）' : target} 上启动（启动失败，或被占用且无法结束）。\n` +
+            '看错误：在项目里跑 dsh-plugin-harness-cli plans serve\n',
         };
       }
       return {
         kind: 'success',
         text:
-          `plans 服务已启动：http://127.0.0.1:${target}/\n` +
-          '页面上的删除 / 重跑 / 保存会直接改仓库文件；停止服务：/harness-cli-plans --stop\n',
+          `plans 服务已启动：http://127.0.0.1:${state.port}/\n` +
+          '页面上的删除 / 重跑 / 保存会直接改仓库文件；停止服务：/harness-cli plans stop\n',
       };
     },
   });
-  ctx.commands.register({
+  define({
+    name: 'harness-cli-delete',
+    description: '删除任务（任务页 / 方案页 / UI 设计稿 / 规范文档 / 复盘）：先弹窗确认，确认后才执行',
+    input: {hint: '<任务名> [--root <dir>]'},
+    handler: async (invocation) => {
+      const parsed = parseTaskInput(invocation?.rawInput);
+      if (parsed.error) return {kind: 'error', text: parsed.error};
+      if (!parsed.task) return {kind: 'error', text: '用法：/harness-cli-delete <任务名> [--root <dir>]'};
+      const resolved = resolveRoot(parsed.root, invocation?.agent?.session?.header?.cwd);
+      if (resolved.error) return {kind: 'error', text: resolved.error};
+      try {
+        assertDirectory(resolved.root);
+      } catch (error) {
+        return {kind: 'error', text: error.message};
+      }
+      const answer = await askChoice(
+        ctx,
+        {agent: invocation?.agent, signal: invocation?.signal},
+        {
+          header: '删除任务',
+          question:
+            `删除任务「${parsed.task}」？任务页、方案页、UI 设计稿、规范文档与复盘都会删除，无法恢复。` +
+            `（目录：prototype/${parsed.task}/、docs/specs/${parsed.task}/）`,
+          options: [
+            {label: '删除', description: '确认删除，并刷新任务总览'},
+            {label: '取消', description: '什么都不做'},
+          ],
+        }
+      );
+      if (answer !== '删除') {
+        return {
+          kind: 'success',
+          text:
+            answer === null
+              ? `没有可用的确认弹窗：请在命令行执行 dsh-plugin-harness-cli delete ${parsed.task} --yes`
+              : '已取消删除：任务保持原样',
+        };
+      }
+      const run = await runCli(['delete', parsed.task, '--yes'], {cwd: resolved.root, signal: invocation?.signal});
+      return {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
+    },
+  });
+  define({
     name: 'harness-cli-doctor',
     description: '工具自检：Node / 模板 / 配置 / 可写 / git / python3',
     input: {hint: '[root]'},
@@ -1207,7 +1572,7 @@ function registerCommands(ctx) {
       return runCommand('doctor', parsed, invocation?.agent?.session?.header?.cwd, invocation?.signal);
     },
   });
-  ctx.commands.register({
+  define({
     name: 'harness-cli-help',
     description: '查看所有 harness-cli 工具与斜杠命令的操作说明',
     input: {hint: '[命令或工具名]'},
@@ -1216,6 +1581,211 @@ function registerCommands(ctx) {
       text: buildHelpText(invocation?.rawInput),
     }),
   });
+
+  // 唯一的指令菜单入口：/harness-cli [子指令] [参数...]
+  ctx.commands.register({
+    name: 'harness-cli',
+    description: 'Harness 指令：初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 推进度 / UI 设计 / 删除任务 / 业务 wiki / 总览',
+    input: {hint: '[子指令] [参数...]（省略子指令=弹窗选择）'},
+    handler: async (invocation) => {
+      const tokens = String(invocation?.rawInput ?? '').trim().match(/"[^"]*"|'[^']*'|\S+/g) || [];
+      // 兼容两种传法：rawInput 只有参数，或把 `/harness-cli` 本名也带进来
+      if (tokens.length > 0 && /^\/?harness-cli$/i.test(tokens[0])) tokens.shift();
+      let sub = (tokens.shift() || '').replace(/^\/+/, '');
+      const fromMenu = sub.length === 0;
+      const subOf = (value) => {
+        const hit = SUBCOMMANDS.find((item) => item.label === value || item.sub === value);
+        return hit ? hit.sub : value;
+      };
+      const labelOf = (value) => {
+        const hit = SUBCOMMANDS.find((item) => item.label === value || item.sub === value);
+        return hit ? hit.label : value;
+      };
+
+      if (!sub) {
+        // 直接在命令里弹选择框：宿主把「活着的请求」渲染成输入框旁的问答卡片
+        let askError = null;
+        const picked = await askChoice(
+          ctx,
+          {agent: invocation?.agent, signal: invocation?.signal},
+          {
+            header: 'Harness 指令',
+            question: '选择要执行的 Harness 指令：',
+            options: SUBCOMMANDS.map((item) => ({label: item.label, description: `/harness-cli ${item.sub}`})),
+          },
+          (err) => {
+            askError = err;
+          }
+        );
+        if (picked === null) {
+          const reason = askError && askError.message ? `（${askError.message}）` : '';
+          return {
+            kind: 'error',
+            text:
+              `选择框没有弹出来${reason}。也可以直接写子指令：` +
+              SUBCOMMANDS.map((item) => `/harness-cli ${item.sub}`).join('、'),
+          };
+        }
+        const byLabel = SUBCOMMANDS.find((item) => item.label === picked);
+        if (!byLabel) return {kind: 'success', text: '已取消'};
+        sub = byLabel.sub;
+      }
+
+      const subName = subOf(sub);
+      let rest = tokens.join(' ').trim();
+      const TASK_SUBS = ['page', 'plan', 'review', 'progress', 'ui', 'delete'];
+      const WORDS_SUBS = ['page', 'plan', 'ui'];
+
+      // 需要任务名的子指令：从菜单选完后再弹一次输入框，让用户补任务名与参数
+      const needsTask = ['page', 'plan', 'review', 'progress', 'ui', 'delete'];
+      if (fromMenu && rest.length === 0 && needsTask.includes(subName)) {
+        const hint = subName === 'progress'
+          ? '可带参数，例如：登录页面 --step 1 --pct 50'
+          : '可带参数，例如：登录页面 --force';
+        let askError = null;
+        const typed = await askChoice(
+          ctx,
+          {agent: invocation?.agent, signal: invocation?.signal},
+          {
+            header: '任务名',
+            question: `「${labelOf(subName)}」需要任务名（${hint}）：`,
+            options: [],
+          },
+          (err) => {
+            askError = err;
+          }
+        );
+        if (typed === null && askError !== null) {
+          return {
+            kind: 'success',
+            text: `已取消（${askError.message}）。也可以直接写：/harness-cli ${subName} <任务名>`,
+          };
+        }
+        if (typed !== null) rest = typed.trim();
+      }
+
+      // 把「任务名 + 需求原话」拆开：整句被当成任务名时，另要一个合法名字，原话进 --user-words
+      if (TASK_SUBS.includes(subName) && rest.length > 0) {
+        const parts = rest.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+        const head = parts[0] || '';
+        const hasWords = parts.includes('--user-words');
+        if (head.length > 0 && !isValidTaskName(head)) {
+          const original = rest.replace(/^["']|["']$/g, '').trim();
+          let askError = null;
+          const typed = await askChoice(
+            ctx,
+            {agent: invocation?.agent, signal: invocation?.signal},
+            {
+              header: '任务名',
+              question: `「${original}」不是合法任务名（只能用字母 / 数字 / 中文 / 中划线，不能有空格或标点）。给它起个短名字：`,
+              options: [],
+            },
+            (err) => {
+              askError = err;
+            }
+          );
+          if (typed === null || !isValidTaskName(typed)) {
+            const reason = askError && askError.message ? `（${askError.message}）` : '';
+            return {
+              kind: 'error',
+              text:
+                `任务名不合法${reason}。用法：/harness-cli ${subName} <任务名>` +
+                (WORDS_SUBS.includes(subName) ? ` --user-words "${original}"` : ''),
+            };
+          }
+          const name = typed.trim();
+          rest = WORDS_SUBS.includes(subName) ? `${name} --user-words "${original}"` : name;
+        } else if (!hasWords && WORDS_SUBS.includes(subName) && !parts.slice(1).some((item) => item.startsWith('-'))) {
+          // 只有「任务名 + 纯文字」才自动转成需求原话；带其他参数时保持原样，别把参数吃掉
+          const extras = parts.slice(1);
+          if (extras.length > 0) {
+            rest = `${head} --user-words "${extras.join(' ').replace(/"/g, '\\"')}"`;
+          }
+        }
+      }
+
+      // 从菜单选「任务总览」：自动带 serve，并弹窗问端口（非必填，留空=随机端口）
+      if (fromMenu && subName === 'plans' && rest.length === 0) {
+        rest = 'serve';
+        let askError = null;
+        const typed = await askChoice(
+          ctx,
+          {agent: invocation?.agent, signal: invocation?.signal},
+          {
+            header: '端口（非必填）',
+            question: 'plans 操作台端口：直接跳过就用系统分配的随机端口。',
+            options: [],
+          },
+          (err) => {
+            askError = err;
+          }
+        );
+        const port = typeof typed === 'string' ? typed.trim() : '';
+        if (port.length > 0) {
+          if (!/^\d+$/.test(port) || Number(port) > 65535) {
+            return {kind: 'error', text: `端口不合法：${port}（只能是 0..65535 的数字，留空=随机）`};
+          }
+          rest = `serve ${Number(port)}`;
+        }
+      }
+
+      // page / agents 只有 CLI 与工具、没有独立斜杠命令：这里直接跑 CLI
+      let result;
+      if (subName === 'page' || subName === 'agents') {
+        const resolvedRoot = resolveRoot(undefined, invocation?.agent?.session?.header?.cwd);
+        if (resolvedRoot.error) return {kind: 'error', text: resolvedRoot.error};
+        const argv = subName === 'page' ? ['page', ...(rest ? rest.split(/\s+/) : [])] : ['agents'];
+        const run = await runCli(argv, {cwd: resolvedRoot.root, signal: invocation?.signal});
+        result = {kind: run.exitCode === 0 ? 'success' : 'error', text: buildReport(run)};
+      } else {
+        const leaf = leaves.find((definition) => definition.name === `harness-cli-${subName}`);
+        if (!leaf) {
+          return {
+            kind: 'error',
+            text: `未知子指令：${sub}。可用：${SUBCOMMANDS.map((item) => item.sub).join(' / ')}`,
+          };
+        }
+        // 子指令的 handler 与原来逐条注册时完全一致，只是参数换成聚合指令后面的部分
+        result = await leaf.handler({...invocation, rawInput: rest});
+      }
+
+      // page / plan 完成后再问一句「要不要顺便出 UI 设计稿」，答「是」就同步执行 ui
+      if ((subName === 'page' || subName === 'plan') && result && result.kind === 'success') {
+        const task = firstTaskName(rest, result.text);
+        if (task) {
+          const picked = await askChoice(
+            ctx,
+            {agent: invocation?.agent, signal: invocation?.signal},
+            {
+              header: 'UI 设计',
+              question: `「${task}」要不要同时生成 UI 设计稿？`,
+              options: [
+                {label: '生成 UI 设计稿', description: `同步执行 /harness-cli ui ${task}`},
+                {label: '先不用', description: '只保留任务页与规范文档'},
+              ],
+            }
+          );
+          if (picked === '生成 UI 设计稿') {
+            const ui = leaves.find((definition) => definition.name === 'harness-cli-ui');
+            if (ui) {
+              const uiResult = await ui.handler({...invocation, rawInput: task});
+              result = {
+                ...result,
+                kind: uiResult.kind === 'error' ? 'error' : result.kind,
+                text: `${result.text}\n已执行 /harness-cli ui ${task}\n${uiResult.text}`,
+              };
+            }
+          }
+        }
+      }
+
+      // 让「到底跑了哪条指令」在对话里显式可见（聚合入口只显示 /harness-cli）
+      if (result && typeof result.text === 'string' && fromMenu) {
+        return {...result, text: `已执行 /harness-cli ${subName}${rest ? ` ${rest}` : ''}\n\n${result.text}`};
+      }
+      return result;
+    },
+  });
 }
 
 /**
@@ -1223,7 +1793,7 @@ function registerCommands(ctx) {
  * @param {any} ctx - Cordis context（`tools` 必存在，`commands` 可选）。
  */
 export function apply(ctx) {
-  for (const spec of TOOL_SPECS) ctx.tools.register(buildTool(spec));
+  for (const spec of TOOL_SPECS) ctx.tools.register(buildTool(spec, ctx));
   if (typeof ctx.inject === 'function') ctx.inject(['commands'], (scoped) => registerCommands(scoped));
   else if (ctx.commands !== undefined) registerCommands(ctx);
 
@@ -1233,8 +1803,13 @@ export function apply(ctx) {
     const bridge = createTodoBridge();
     ctx.on('session/event', (session, event) => {
       return bridge.handle(session, event).then((result) => {
-        if (result && result.ok === false && !result.skipped) {
-          const message = `[harness-cli] DSH todo 同步失败：${result.error || '未知错误'}`;
+        // warn：按设计没有写入，但用户需要知道为什么（例如方案还没确认）
+        const message = result && result.warn
+          ? `[harness-cli] ${result.warn}`
+          : result && result.ok === false && !result.skipped
+            ? `[harness-cli] DSH todo 同步失败：${result.error || '未知错误'}`
+            : '';
+        if (message) {
           if (ctx.logger && typeof ctx.logger.warn === 'function') ctx.logger.warn(message);
           else console.warn(message);
         }

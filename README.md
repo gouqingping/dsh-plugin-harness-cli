@@ -1,6 +1,6 @@
 # dsh-plugin-harness-cli
 
-> **DSH 插件**：装好后在 DSH 里获得 11 个工具（`harness_cli_*`）与 10 条斜杠命令（`/harness-cli-*`），
+> **DSH 插件**：装好后在 DSH 里获得 12 个工具（`harness_cli_*`）与 1 条聚合斜杠命令（`/harness-cli`），
 > 让模型按同一套 Harness 规范生成、校验、推进项目，而不是靠提示词自觉。
 
 [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/gouqingping/dsh-plugin-harness-cli)
@@ -8,14 +8,14 @@
 ## 安装（DSH 插件市场）
 
 ```sh
-# npm 最新发布 0.1.1；仓库当前版本 0.1.2（未发布），也是 DSH 插件中心用的安装命令
+# npm 最新发布 0.1.1；仓库当前版本 0.1.3（未发布），也是 DSH 插件中心用的安装命令
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
 dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
 ```
 
-装完重启 DSH，然后在任意项目里执行 `/harness-cli-init`；命令与工具清单见 `/harness-cli-help`。
+装完重启 DSH，然后在任意项目里执行 `/harness-cli` 并选「初始化」；命令与工具清单见 `/harness-cli help`。
 
 > 收录状态、提交模板与自查项见 [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md)；
 > `node --test` 里的 `listing.test.js` 会断言仓库内的收录要求。
@@ -109,12 +109,13 @@ common-agent/                    ← 工作区里的项目目录
 | `agents [--stdout] [--force]` | 由 `harness-cli.json` 生成 `AGENTS.md`，并报行数（>100 警告，>120 失败） | 0 / 1 |
 | `page <任务名> [--user-words "原话"]` | 建任务页 + 四份规范文档 + 方案页 + 刷新总览（预设未开启会自动补；任务名支持中文） | 0 / 1 / 2 |
 | `review [任务名] [--agent <标识>]` | 复盘：跑项目判定，写 `docs/specs/<task>/review.md`（含四份文档指纹）；**省略任务名=自动选最近的任务** | 0 / 1 / 2 |
-| `plan [任务名] [--confirm --by "确认人"]` | 建任务时一次补全 `docs/specs` 四份文档 + 任务页 + 方案页；确认前校验「复盘通过 + 文档指纹未变」；省略任务名=最近的任务 | 0 / 1 / 2 |
-| `progress <任务名> [--step N --pct 0..100] [--status …] [--note …]` | 唯一进度写入口：改步骤 / 状态 → 追加记录 → 重算总进度 → 同步总览 | 0 / 1 / 2 |
+| `plan [任务名] [--confirm --by "确认人"]` | 建任务时一次补全 `docs/specs` 四份文档 + 任务页 + 方案页；确认是可选步骤（确认前校验「复盘通过 + 文档指纹未变」）；省略任务名=最近的任务 | 0 / 1 / 2 |
+| `progress <任务名> [--step N --pct 0..100] [--status …] [--note …]` | 唯一进度写入口：改步骤 / 状态 → 追加记录 → 重算总进度 → 同步总览；**不要求先确认方案**（P21 由 check 在交付前拦） | 0 / 1 / 2 |
 | `ui [任务名] [--user-words "原话"] [--force]` | 生成 antd 风格 UI 设计稿、同步 `design.md`，并把「设计说明缺口」列成清单；斜杠命令会自动发起补全 | 0 / 1 / 2 |
+| `delete <任务名> [--yes]` | 删除任务的页面 / 设计稿 / 规范文档 / 复盘；默认只预演，`--yes` 才真删（DSH 侧会用弹窗确认） | 0 / 1 / 2 |
 | `check [--strict] [--json]` | 只读校验；`--strict` 让警告也算失败 | 0 / 1 / 2 |
 | `doctor [--json]` | 工具自检：Node 版本、模板、配置、可写、是否 git 仓库、python3 | 0 / 2 |
-| `plans [--serve] [--port 7788]` | 根目录 `plans.html`：任务总览（**点任务名弹窗看 `progress.html`** / 展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
+| `plans [serve [端口] \| stop]` | 根目录 `plans.html`：任务总览（`serve` 省略端口时用随机安全端口，启动后回显地址；指定端口被占用会强制接管；`stop` 停止）（**点任务名弹窗看 `progress.html`** / 展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
 | `wiki [--update\|--keep\|--ask] [--check] [--dry-run]` | 生成 / 更新 `docs/wiki`（13 篇业务文档），并同步每个任务 `proposal.md` 的业务背景区块 | 0 / 1 / 2 |
 | `style <参数...>` | 把参数原样转给随包的 `harness-style`（代码风格 / 提交信息） | 透传 |
 
@@ -138,7 +139,7 @@ init.sh                      环境初始化（幂等、set -euo pipefail、失�
 scripts/gate.sh              门禁（lint → 测试 → WIP 上限 + 认领一致性）
 scripts/claim.js             并行 loop 的认领工具（add / release / heartbeat / list / verify / prune）
 docs/specs/README.md         规范文档约定（每个任务四份：proposal / spec / design / tasks）
-docs/wiki/*.md                业务文档（由 wiki 子命令生成，13 篇 + 业务域下钻页）
+docs/wiki/*.md                业务文档（由 wiki 子命令生成，13 篇；业务域下钻页在 dirs 声明 name 时才有）
 docs/claims/README.md        认领协议（人读的约定；每个 loop 的认领落在 docs/claims/<F-xxx>.json）
 docs/feature_list.json       功能清单（acceptance / evidence / depends_on / WIP 上限内并行）
 claude-progress.md           进度日志（六节，含「下一步行动」）
@@ -194,7 +195,7 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
   "project": {"name": "...", "positioning": "...", "stack": ["TypeScript"]},
   "paths": {"gate": "scripts/gate.sh", "featureList": "docs/feature_list.json", "claims": "docs/claims"},
   "commands": {"test": "npm test", "gate": "bash scripts/gate.sh"},
-  "dirs": [{"path": "src/", "desc": "源码"}],
+  "dirs": [{"path": "src/", "name": "订单履约", "desc": "下单、发货、退款"}],
   "conventions": ["..."], "forbidden": ["..."], "dod": ["..."],
   "presets": {"prototype": {"enabled": false, "keep": 10}},
   "claims": {"enabled": true, "ttlHours": 12}
@@ -202,6 +203,9 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
 ```
 
 并行度不在这个文件里，而在 `task_queue.json` 的 `wipLimit`（默认 1）：一个地方定义"同时能做几件事"。
+
+`dirs[].name` 是**业务名**（可省略）：写了才会为这个目录生成「业务域」下钻页；只写 `desc` 不会——
+目录名（`bin`、`src`）是代码结构，拿它当业务域会把代码写进业务文档。
 
 文案里可用 `{featureList}` / `{gate}` / `{progress}` 等占位符引用配置过的路径。
 
@@ -252,9 +256,16 @@ node scripts/prototype-check.js --prune --dry-run
 （`--force` 才重写）。改完：
 
 1. `review <task>` —— Agent 复盘：跑项目判定（文档与页面一致性），写 `review.md`（含四份文档的指纹）；
-2. `plan <task> --confirm --by "确认人"` —— 人最终确认：核对复盘指纹后，把方案标为「已确认」并记下文档指纹；
-3. 之后才能 `progress` 推进度。**文档在确认后又被改过，确认立即失效**（progress 拒绝、P22 失败），要重新复盘再确认。
+2. `plan <task> --confirm --by "确认人"` —— 确认方案（**可选**）：核对复盘指纹后，把方案标为「已确认」；
+   走 DSH 工具 / 斜杠命令时，确认这一步会**弹窗让你点选**，选「取消」就保持未确认；
+3. `plan` 生成成功后**自动开工**：把任务推入执行，并在当前对话发起一个执行回合（按 `tasks.md` 的 Step 1..N 开工，
+   每步调用 `progress` 记录）；同时后台起 `plans` 操作台（默认随机安全端口，地址会回显在对话里）。
+   只想改文档不想开工时用 `plan --confirm`（确认）或 `--dry-run`。
+4. `progress` **不要求先确认**：发起任务就能记进度，不用等方案确认。
+   `check` 的 P21（未确认）与 P22（确认后文档又被改过）仍是红项，交付前会拦——记录不拦、交付拦。
    每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻跑一次 `progress` 并同步总览，不要攒到收工一次性补。
+   `progress` 会先写任务页、再重算 `prototype/progress.html`；同步脚本缺失时自动按模板补回，
+   补不回来就报一行可执行的修法（跑 `init`），不会再只更新任务页而让总览停在旧数据。
 需要界面时先跑 `ui <task>`：生成 `prototype/<task>/ui/index.html`（antd v5 令牌 + 布局 + 表格 + 表单 + 状态）
 与设计说明；默认不覆盖人工修改，`--force` 才重写。所有 UI 统一 antd，P20 会拦第二套设计体系。
 
@@ -299,25 +310,30 @@ node scripts/claim.js verify
 ```sh
 node plugin/bin/dsh-plugin-harness-cli.js wiki            # 缺则新建，有则更新（默认 ask）
 node plugin/bin/dsh-plugin-harness-cli.js wiki --keep     # 只补缺失，冲突文件保留
-node plugin/bin/dsh-plugin-harness-cli.js wiki --update   # 覆盖受管区块（人工内容仍不动）
-node plugin/bin/dsh-plugin-harness-cli.js wiki --check    # 只报告：缺失 / 过期 / 冲突
+node plugin/bin/dsh-plugin-harness-cli.js wiki --update   # 更新受管区块；无区块的既有文档补区块、正文原样保留
+node plugin/bin/dsh-plugin-harness-cli.js wiki --check    # 只报告：缺失 / 过期 / 待接管 / 冲突
 ```
 
 生成规则（`src/wiki.js`）：
 
+- **正文是业务白话**：不写命令、代码块、流程图、字段名与文件路径；技术细节留在 `README.md`；
+  这一条由用例守着（生成物里出现三反引号、`mermaid` 或命令行即失败）；
 - 每篇只有一个**受管区块**：`<!-- harness-wiki:begin -->` … `<!-- harness-wiki:end -->`；
 - **区块外的人工内容永远不会被覆盖**，区块内被人工改过则报冲突；
-- 冲突处理三档：`ask`（TTY 逐个询问；非 TTY 报告并以退出码 1 交给人拍板）、`auto`（覆盖）、
+- 既有文档**没有**受管区块时判为「待接管」：`--update` 在标题后补上区块、正文一字不改，
+  之后这份文件进入正常增量维护；`ask` 在非交互环境只报告并以退出码 1 交给人拍板；
+- 冲突处理三档：`ask`（TTY 逐个询问；非 TTY 报告并以退出码 1 交给人拍板）、`auto`（接管 / 覆盖）、
   `keep`（保留人工内容，只补缺失文件）；
 - 生成时间只写进 `docs/wiki/.harness-wiki.json`，不进正文，避免每次运行都制造改动；
+- **业务域下钻页只在 `dirs` 声明了 `name`（业务名）时生成**：目录名（`bin`、`src`）是代码结构，不是业务域；
 - **只反推项目自己的文件**：会排除工作区里嵌入的 harness-cli 工具目录（按包名 / `bin/dsh-plugin-harness-cli.js` 识别）以及它生成的脚本与页面（`scripts/claim.js`、`scripts/prototype-check.js`、`scripts/gate.sh`、`init.sh`、`prototype/`、`plans.html` 等），避免把工具自身当成业务代码；
-- 内容只来自扫描到的事实：技术栈、目录、任务/功能、命令、定位都会**反推**；推不出来的位置不再用「待补」占位，而是以「仍需人工确认：N 处」列在输出里（文件:行），
-  命令会要求 Agent 反推工作区补全后重跑。
+- 内容只来自扫描到的事实：技术栈、任务/功能、认领、定位都会**反推**；推不出来的业务内容标成
+  「待业务确认」，以「仍需人工确认：N 处」列在输出里（文件:行），由 Agent 反推工作区补全后重跑。
 
-DSH 侧对应工具 `harness_cli_wiki` 与斜杠命令 `/harness-cli-wiki`：模型先以默认模式跑，遇到退出码 1
-（冲突）就询问用户，再带 `auto` 或 `keep` 重跑。生成后若还有「仍需人工确认」的缺口，
+DSH 侧对应工具 `harness_cli_wiki` 与斜杠命令 `/harness-cli wiki`：模型先以默认模式跑，遇到退出码 1
+（待接管或冲突）就询问用户，再带 `auto` 或 `keep` 重跑。生成后若还有「仍需人工确认」的缺口，
 命令会通过 `agent.followup` **在当前对话自动发起一条「反推补全」消息**（带缺口清单路径与步骤），
-Agent 补完并重跑直到 0 缺口；`--check` 不会发起。
+Agent 用业务白话补完并重跑直到 0 缺口；`--check` 不会发起。
 
 ## 10. 随包的 harness-style（`style` 子命令）
 
@@ -376,6 +392,7 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 | `harness_cli_plan` | `plan <task> [--confirm]` | 是（`plan.html` + `review.md` 状态） | 0 / 1 / 2 |
 | `harness_cli_progress` | `progress <task>` | 是（步骤 / 状态 / 记录 / 总览） | 0 / 1 / 2 |
 | `harness_cli_ui` | `ui <task>` | 是（`prototype/<task>/ui/`） | 0 / 1 / 2 |
+| `harness_cli_delete` | `delete <task>` | 是（删任务页 / 设计稿 / 规范文档 / 复盘） | 0 / 1 / 2 |
 | `harness_cli_wiki` | `wiki` | 是（`docs/wiki` 受管区块） | 0 / 1（冲突需决策）/ 2 |
 | `harness_cli_agents` | `agents` | 是（`dry_run` / `force`） | 0 / 1 |
 | `harness_cli_doctor` | `doctor` | 否（工具自检） | 0 / 2 |
@@ -383,14 +400,31 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 
 另外，插件会订阅 DSH 的 `session/event`：顶层会话每次写 `todo/write`，就按 todo 标题匹配当前任务页步骤，
 把 `completed` / `in_progress` / `pending` 自动映射成 `100%` / `50%` / `0%`，再调用 `progress` 落盘。
-方案未确认、任务不唯一或步骤匹配不到时跳过，不绕过 P21/P22 的确认链；同一会话的事件串行处理。
+方案未确认**不再拦进度**（P21 交给 `check` 在交付前拦）；任务不唯一或步骤匹配不到时跳过并在会话里告警；
+同一会话的事件串行处理。
 
-以及十条斜杠命令：`/harness-cli-check [root] [--strict]`、`/harness-cli-init [root] [--preset prototype] [--force] [--dry-run]`
-（**默认启用任务页能力**）、`/harness-cli-review [任务名]`、`/harness-cli-plan [任务名] [--confirm --by "人"]`、
-`/harness-cli-progress <任务名> --step N --pct X`、`/harness-cli-ui [任务名] [--force]`、
-`/harness-cli-wiki [root] [--update|--keep|--check]`、`/harness-cli-doctor [root]`、
-`/harness-cli-plans [--serve] [--port 7788] [--stop]`（任务总览：起本机服务后，点任务名弹窗看详细进度，列表通过 SSE 实时更新，按钮可直接删除 / 重跑 / 保存）、
-`/harness-cli-help [命令或工具名]`（一次看全所有工具与命令的用法）。
+需要用户拍板的操作一律**弹窗点选**，不靠打印提示让人自己跑命令：wiki 冲突（接管 / 只补缺失 / 取消）、
+删除任务（删除 / 取消）、`--force` 覆盖已有文件（覆盖 / 取消）、方案确认（确认 / 取消）都走这条路径；
+弹窗来自宿主的 `userQuestions` 服务，没有可用 UI 时退化为非交互行为（删除则直接拒绝，要求 `--yes`）。
+
+输入框工具栏上还有一个**准星 + 指令**按钮（Web 客户端半边 `plugin/client.js`）：点开在按钮正上方弹出菜单，
+列出 13 条中文子指令，选中即执行；需要任务名的只填入、等你补上任务名再回车。
+菜单 portal 到 `document.body` 并用按钮矩形定位（输入框是 fixed 容器，不 portal 会被裁掉），
+颜色只用主题令牌，深浅色自动跟随。客户端半边由页面在启动时加载，装好后需要刷新页面。
+
+以及**一条**聚合斜杠命令：`/harness-cli [子指令] [参数...]`。
+不带子指令时弹窗让你选（初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 推进度 / UI 设计 / 删除任务 / 业务 wiki / 任务总览 / 入口地图 / 帮助），
+选中后执行对应动作；也可以直接写子指令，例如 `/harness-cli check`、`/harness-cli plan 登录页面 --confirm`。
+从菜单选「任务总览」会自动带上 `serve`，并弹一个**非必填**的端口输入框：跳过=随机端口，填数字=固定端口。
+`page` / `plan` 完成后还会问一句「要不要同时生成 UI 设计稿」，选「是」就在同一条命令里接着跑 `ui`；
+所有从菜单发起的指令，结果开头都会写 `已执行 /harness-cli <子指令>`，在对话里可追溯。
+任务名后面的说明会自动进 `--user-words`（`/harness-cli plan 登录页面 添加最小6位最大8位的限制`）；
+如果整句都被当成了任务名（含标点/空格），会弹窗要一个短名字，原句仍作为需求写进文档。
+宿主没有指令分组能力，所以 12 条独立指令会塞满菜单——这里统一收成一条入口，子指令行为与原来逐条注册时完全一致。
+
+在 `/` 菜单里选中指令只是把它填进输入框，**要按 Enter 才执行**（输入框的宿主逻辑，插件改不了）。
+回车后命令处理器直接向宿主的问答服务发起一次单请求，选择卡片出现在输入框上方；选中即执行对应子指令，
+不经过模型，也不会把任何提示文字漏进对话。如果没有可用的问答界面，会返回一行原因并附上子指令写法。
 
 两个宿主细节写在 `cordis.mjs` 顶部：DSH 桌面端是 Electron，所以子进程要带
 `ELECTRON_RUN_AS_NODE=1` 才会被当成 node 执行；目标仓库用子进程的 `cwd` 指定而不是 `--root`，

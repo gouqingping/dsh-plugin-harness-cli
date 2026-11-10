@@ -21,11 +21,11 @@ const style = require('./style');
 const {applyWiki, planWiki, wikiStatus, collectFacts, wikiGaps, writeGapReport, DEFAULT_DIR: WIKI_DIR} = require('./wiki');
 const {syncDesignFromUi, syncProposalFromWiki} = require('./sync');
 const {uiGaps, writeUiGapReport} = require('./ui');
-const {refreshPlans, collectTasks, servePlans} = require('./plans');
+const {refreshPlans, collectTasks, servePlans, deleteTask} = require('./plans');
 const {defaultModel, mergeFlags, renderDocs, applyToPage, applyToPlan} = require('./specs');
 const {loadTemplate} = require('./templates');
 const {render} = require('./render');
-const {exists, isDir, isText, isTaskName, writeFileSafe, today} = require('./util');
+const {exists, isDir, isText, isTaskName, writeFileSafe, toPosix, today} = require('./util');
 
 const VERSION = require('../package.json').version;
 
@@ -39,9 +39,10 @@ const USAGE = `dsh-plugin-harness-cli ${VERSION} —— 公共项目配置工具
   dsh-plugin-harness-cli plan [任务名] [--confirm --by "确认人"] [--user-words "原话"]
   dsh-plugin-harness-cli progress <任务名> [--step N --pct 0..100] [--status 进行中|待验收|完成] [--note "说明"]
   dsh-plugin-harness-cli ui [任务名] [--user-words "原话"] [--force]   （省略任务名=最近的任务）
+  dsh-plugin-harness-cli delete <任务名> [--yes]                     # 删除任务页 / 设计稿 / 规范文档 / 复盘
   dsh-plugin-harness-cli check [--strict] [--json]
   dsh-plugin-harness-cli doctor [--json]
-  dsh-plugin-harness-cli plans [--serve] [--port 7788] [--stop]   # 根目录 plans.html：任务总览与操作台
+  dsh-plugin-harness-cli plans [serve [端口] | stop]   # 省略端口=随机安全端口；指定端口被占用会强制接管
   dsh-plugin-harness-cli wiki [--update|--keep|--ask] [--check] [--dry-run] [--json]
   dsh-plugin-harness-cli style <harness-style 参数...>
   dsh-plugin-harness-cli version | help
@@ -54,11 +55,12 @@ ui 生成 / 更新任务页的 UI 设计稿（Ant Design v5 风格，落在 prot
   --force       覆盖已存在的设计稿（默认不覆盖）
   --dry-run     只打印将写入的文件
 
-wiki 生成 / 更新 docs/wiki（13 篇业务文档）：
-  --update      受管区块一律更新（--auto 同义）
+wiki 生成 / 更新 docs/wiki（13 篇业务文档，正文是业务白话，不写命令与代码）：
+  --update      受管区块一律更新；没有受管区块的既有文档会补区块、正文原样保留
   --keep        只创建缺失文件，冲突文件保留不写
   --ask         冲突时逐个询问（默认；非交互环境视为保留并以退出码 1 报告）
-  --check       只报告：缺失 / 过期 / 冲突，不写盘
+  --check       只报告：缺失 / 过期 / 待接管 / 冲突，不写盘
+  业务域下钻页只在配置的 dirs 里声明了 name（业务名）时生成，不拿目录名当业务域
 
 通用参数：
   --root <dir>   目标仓库根目录（默认 cwd）
@@ -114,6 +116,7 @@ function parseArgs(argv) {
     else if (key === 'ask') flags.wikiMode = 'ask';
     else if (key === 'check') flags.check = true;
     else if (key === 'confirm') flags.confirm = true;
+    else if (key === 'yes' || key === 'y') flags.yes = true;
     else if (key === 'serve') flags.serve = true;
     else if (key === 'stop') flags.stop = true;
     else if (key === 'help' || key === 'h') flags.help = true;
@@ -359,12 +362,9 @@ function cmdUi(root, flags) {
   }
 
   // 让总览页的「UI」列立即正确
-  const sync = spawnSync(process.execPath, [path.join(root, config.paths.prototypeCheck), '--sync'], {
-    cwd: root,
-    encoding: 'utf8',
-  });
-  if (sync.status !== 0) {
-    process.stderr.write(`  总览页同步失败（UI 稿已写入）：${(sync.stderr || sync.stdout || '').trim()}\n`);
+  const synced = syncOverview(root, config);
+  if (!synced.ok) {
+    process.stderr.write(`  总览页同步失败（UI 稿已写入）：${synced.message}\n`);
     return 2;
   }
   // 生成只是第一步：把「还缺什么」列成清单，交给 /harness-cli-ui 自动发起补全
@@ -740,6 +740,50 @@ function cmdPlan(root, flags) {
  * 每次调用都会：更新步骤百分比 → 追加一条进度记录 → 重算总进度 → 同步总览页。
  * 方案未确认时拒绝写入（先确认再开始）。
  */
+/**
+ * 总览同步脚本缺失时按模板补回（只写这一个文件，不动其他生成物）。
+ * 老项目、或手工删过脚本的项目里，progress 会只更新任务页而不同步总览，
+ * 用户看到的就是「任务页有进度、prototype/progress.html 没变」。
+ * @returns {string|null} 脚本绝对路径；补不回来返回 null。
+ */
+function ensurePrototypeCheck(root, config) {
+  const target = path.join(root, config.paths.prototypeCheck);
+  if (exists(target)) return target;
+  try {
+    const ctx = {...buildContext(config, {}), today: today()};
+    writeFileSafe(target, render(loadTemplate('prototypeCheck'), ctx), 0o755);
+    process.stdout.write(`  CREATE  ${config.paths.prototypeCheck}（总览同步脚本缺失，已按模板补回）\n`);
+    return target;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * 重算总览页（prototype/progress.html）。
+ * 同步脚本是生成物：缺失时先按模板补回，失败时只报一行可执行的修法，
+ * 不把 Node 的模块缺失堆栈甩给业务人员。
+ * @returns {{ok: boolean, message: string}}
+ */
+function syncOverview(root, config) {
+  const check = ensurePrototypeCheck(root, config);
+  if (check === null) {
+    return {
+      ok: false,
+      message: `缺少 ${config.paths.prototypeCheck} 且自动补齐失败；跑 dsh-plugin-harness-cli init 重新生成`,
+    };
+  }
+  const sync = spawnSync(process.execPath, [check, '--sync'], {cwd: root, encoding: 'utf8'});
+  const out = `${sync.stdout || ''}${sync.stderr || ''}`.trim();
+  if (sync.status === 0) return {ok: true, message: '', out};
+  const first = (sync.stderr || sync.stdout || '').trim().split('\n')[0] || `退出码 ${sync.status}`;
+  return {
+    ok: false,
+    message: `${first}；跑 dsh-plugin-harness-cli init 重新生成 ${config.paths.prototypeCheck} 后重试`,
+    out,
+  };
+}
+
 function cmdProgress(root, flags) {
   const task = flags.args && flags.args[0];
   if (!isText(task)) return fail('用法：dsh-plugin-harness-cli progress <任务名> [--step N --pct 0..100] [--status ...]');
@@ -757,22 +801,17 @@ function cmdProgress(root, flags) {
   const ctx = ready.ctx;
   const planFile = path.join(root, ctx.prototype.dir, task, 'plan.html');
   const planText = readIfExistsFile(planFile) || '';
-  if (!/data-plan-status="已确认"/.test(planText)) {
-    return refuse(`方案未确认：先跑 dsh-plugin-harness-cli plan ${task} --confirm --by "确认人" 再推进度`);
-  }
 
-  // 确认只对「当时的文档」有效：文档改过就必须重新复盘 + 重新确认
+  // 进度是事实记录，不是奖励：方案未确认 / 文档改过 / 复盘未过都不拦写入，
+  // 只把这些「门禁还没过」的事实一并打印出来；真正的拦截在 check 里（P21 / P22）。
+  const confirmed = /data-plan-status="已确认"/.test(planText);
   const planHash = (/data-docs-hash="([^"]*)"/.exec(planText) || [])[1] || '';
   const currentHash = docsHash(root, task, config.paths);
-  if (planHash !== currentHash) {
-    return refuse(
-      `docs/specs/${task}/ 在方案确认后被改过：重新跑 review ${task} 与 plan ${task} --confirm --by "确认人" 再推进度`
-    );
-  }
   const review = readReview(root, task, config.paths);
-  if (!review.passed) {
-    return refuse(`复盘未通过：先跑 review ${task} 并完成人工确认`);
-  }
+  const gateNotes = [];
+  if (!confirmed) gateNotes.push('方案未确认（check 的 P21 仍是红项）');
+  else if (planHash !== currentHash) gateNotes.push('方案确认后文档又被改过，确认已失效（check 的 P22 仍是红项）');
+  if (!review.passed) gateNotes.push('复盘未通过（交付前仍需补 review）');
 
   const pageFile = path.join(root, ctx.prototype.dir, task, ctx.prototype.progressPage);
   let html = fs.readFileSync(pageFile, 'utf8');
@@ -832,12 +871,10 @@ function cmdProgress(root, flags) {
   html = html.replace(/(<time[^>]*data-updated[^>]*datetime=")[^"]*(">)[^<]*(<\/time>)/, `$1${now}$2${now}$3`);
   writeFileSafe(pageFile, html);
 
-  const sync = spawnSync(process.execPath, [path.join(root, config.paths.prototypeCheck), '--sync'], {
-    cwd: root,
-    encoding: 'utf8',
-  });
-  if (sync.status !== 0) {
-    process.stderr.write(`  总览页同步失败（任务页已更新）：${(sync.stderr || sync.stdout || '').trim()}\n`);
+  // 总览页由项目里的同步脚本重算；脚本缺失时先补回来，否则任务页更新了、总览却不动。
+  const synced = syncOverview(root, config);
+  if (!synced.ok) {
+    process.stderr.write(`  总览页同步失败（任务页已更新）：${synced.message}\n`);
     return 2;
   }
 
@@ -846,6 +883,42 @@ function cmdProgress(root, flags) {
   if (pct !== undefined) process.stdout.write(`  第 ${stepNo} 步 → ${pct}%\n`);
   if (status !== undefined) process.stdout.write(`  状态 → ${status}\n`);
   process.stdout.write(`  总进度 ${total}%（已追加记录、已同步总览）\n`);
+  if (gateNotes.length > 0) {
+    for (const note of gateNotes) process.stdout.write(`  提醒：${note}\n`);
+  }
+  return 0;
+}
+
+/**
+ * 删除任务：任务页、设计稿、规范文档、复盘。
+ * 不可逆，所以默认只「预演」并退出 1；确认后带 --yes 才真的删。
+ */
+function cmdDelete(root, flags) {
+  const task = flags.args && flags.args[0];
+  if (!isText(task)) return fail('用法：dsh-plugin-harness-cli delete <任务名> [--yes]');
+  if (!isTaskName(task)) {
+    return fail(`任务名只能用字母 / 数字 / 中文 / 中划线 / 下划线（不能有空格或斜杠）：${task}`);
+  }
+  const {config} = loadConfig(root);
+  const proto = (config.presets && config.presets.prototype) || {};
+  const pageDir = path.join(root, proto.dir || 'prototype', task);
+  const specDir = path.join(root, config.paths.specs || 'docs/specs', task);
+  const targets = [pageDir, specDir].filter((dir) => isDir(dir));
+  if (targets.length === 0) {
+    return refuse(`任务「${task}」不存在：没有 ${toPosix(path.relative(root, pageDir))}/ 或 ${toPosix(path.relative(root, specDir))}/`);
+  }
+
+  if (!flags.yes) {
+    process.stdout.write(`dsh-plugin-harness-cli delete → ${task}（预演，未删除）\n`);
+    for (const dir of targets) process.stdout.write(`  将删除  ${toPosix(path.relative(root, dir))}/\n`);
+    process.stderr.write('删除不可逆：确认后加 --yes 重跑，或在对话里用弹窗确认。\n');
+    return 1;
+  }
+
+  const result = deleteTask(root, config, task);
+  process.stdout.write(`dsh-plugin-harness-cli delete → ${task}\n`);
+  for (const dir of result.removed) process.stdout.write(`  REMOVED ${dir}/\n`);
+  process.stdout.write('  已刷新任务总览（plans.html 与 prototype/progress.html）\n');
   return 0;
 }
 
@@ -965,6 +1038,40 @@ function stopPlansServer(root, config) {
   return {ok: true, message: `已停止 plans 服务（pid ${state.pid}，端口 ${state.port}）`};
 }
 
+/** 找出本机监听某端口的进程 PID（查不到返回空数组）。 */
+function portOwnerPids(port) {
+  const pids = new Set();
+  const add = (value) => {
+    const pid = Number(value);
+    if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid);
+  };
+  if (process.platform === 'win32') {
+    const out = spawnSync('netstat', ['-ano'], {encoding: 'utf8'}).stdout || '';
+    for (const match of out.matchAll(new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'g'))) {
+      add(match[1]);
+    }
+    return [...pids];
+  }
+  const lsof = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], {encoding: 'utf8'});
+  if (lsof.status === 0 && lsof.stdout) {
+    for (const line of lsof.stdout.split('\n')) if (line.trim()) add(line.trim());
+  }
+  if (pids.size === 0) {
+    const ss = spawnSync('ss', ['-ltnp', `sport = :${port}`], {encoding: 'utf8'});
+    for (const match of String(ss.stdout || '').matchAll(/pid=(\d+)/g)) add(match[1]);
+  }
+  return [...pids];
+}
+
+/** 同步小睡：给被结束的进程一点退出时间，避免紧接着 bind 还是 EADDRINUSE。 */
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch (err) {
+    // 环境不支持就跳过，靠 servePlans 的报错兜底
+  }
+}
+
 function cmdPlans(root, flags) {
   let config;
   try {
@@ -973,15 +1080,40 @@ function cmdPlans(root, flags) {
     return fail(error.message);
   }
 
-  if (flags.stop) {
+  const args = flags.args || [];
+  const subcommand = args[0] === 'serve' || args[0] === 'stop' ? args[0] : undefined;
+
+  if (flags.stop || subcommand === 'stop') {
     const result = stopPlansServer(root, config);
     (result.ok ? process.stdout : process.stderr).write(`${result.message}\n`);
     return result.ok ? 0 : 1;
   }
 
-  if (flags.serve) {
-    const port = flags.port === undefined ? 7788 : Number(flags.port);
-    if (!Number.isInteger(port) || port < 0 || port > 65535) return fail('--port 必须是 0..65535');
+  if (flags.serve || subcommand === 'serve') {
+    // 只认一个参数：端口。省略 = 0，由系统分配一个空闲的安全端口。
+    const rawPort = subcommand === 'serve' ? args[1] : flags.port;
+    const port = rawPort === undefined ? 0 : Number(rawPort);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) return fail('端口必须是 0..65535');
+
+    // 先结束上一次的 plans 服务；指定了固定端口时，再把占着它的进程清掉
+    const previous = readPlansState(root, config);
+    if (previous && Number.isInteger(previous.pid)) {
+      const stopped = stopPlansServer(root, config);
+      if (stopped.ok) process.stdout.write(`  ${stopped.message}\n`);
+    }
+    if (port !== 0) {
+      const owners = portOwnerPids(port);
+      for (const pid of owners) {
+        try {
+          process.kill(pid, 'SIGKILL');
+          process.stdout.write(`  端口 ${port} 被 pid ${pid} 占用，已强制结束\n`);
+        } catch (err) {
+          process.stderr.write(`  端口 ${port} 的 pid ${pid} 结束失败：${err.message}\n`);
+        }
+      }
+      if (owners.length > 0) sleepSync(200);
+    }
+
     servePlans(root, config, port)
       .then(({port: actual}) => {
         const stateFile = plansStateFile(root, config);
@@ -1000,7 +1132,7 @@ function cmdPlans(root, flags) {
         };
         process.on('SIGINT', cleanup);
         process.on('SIGTERM', cleanup);
-        process.stdout.write(`dsh-plugin-harness-cli plans --serve → http://127.0.0.1:${actual}/\n`);
+        process.stdout.write(`dsh-plugin-harness-cli plans serve → http://127.0.0.1:${actual}/\n`);
         process.stdout.write('  只监听本机、无鉴权；Ctrl+C 停止。删除 / 重跑 / 保存会直接改仓库文件。\n');
       })
       .catch((error) => {
@@ -1013,7 +1145,7 @@ function cmdPlans(root, flags) {
   if (!refreshPlans(root, config)) return fail('无法写入 plans.html');
   const tasks = collectTasks(root, config);
   process.stdout.write(`dsh-plugin-harness-cli plans → ${path.relative(root, path.join(root, 'plans.html'))}\n`);
-  process.stdout.write(`  ${tasks.length} 个任务（展开可编辑文档；--serve 后按钮可直接删除 / 重跑 / 保存）\n`);
+  process.stdout.write(`  ${tasks.length} 个任务（展开可编辑文档；plans serve 后按钮可直接删除 / 重跑 / 保存）\n`);
   return 0;
 }
 
@@ -1035,7 +1167,17 @@ function cmdWiki(root, flags) {
       process.stdout.write(`  目录：${dir}${status.exists ? '' : '（不存在）'}\n`);
       if (status.missing.length) process.stdout.write(`  缺少：${status.missing.join(', ')}\n`);
       if (status.stale.length) process.stdout.write(`  过期：${status.stale.join(', ')}\n`);
-      if (status.conflicts.length) process.stdout.write(`  冲突：${status.conflicts.join(', ')}\n`);
+      if (status.conflicts.length) {
+        const adoptable = new Set(status.adoptable || []);
+        const adopt = status.conflicts.filter((name) => adoptable.has(name));
+        const edited = status.conflicts.filter((name) => !adoptable.has(name));
+        if (adopt.length) {
+          process.stdout.write(`  待接管（无受管区块；--update 会补区块并原样保留正文）：${adopt.join(', ')}\n`);
+        }
+        if (edited.length) {
+          process.stdout.write(`  冲突（受管区块被人工改过）：${edited.join(', ')}\n`);
+        }
+      }
       if (!status.missing.length && !status.stale.length && !status.conflicts.length) {
         process.stdout.write('  全部为最新 ✓\n');
       }
@@ -1091,10 +1233,12 @@ function cmdWiki(root, flags) {
     process.stdout.write(`  已同步 ${proposalSync.tasks.length} 个任务的 docs/specs/<任务>/proposal.md（业务背景区块）\n`);
   }
 
-  // 生成只是第一步：再反推一遍工作区，把仍无法推导的位置列出来（不再用「待补」占位）
+  // 生成只是第一步：再反推一遍工作区，把仍无法推导的位置列出来
   const gaps = wikiGaps(root, dir);
   const gapsFile = writeGapReport(root, dir, gaps);
-  process.stdout.write(`  反推工作区：13 篇已按当前仓库补全；仍需人工确认：${gaps.length} 处（清单：${gapsFile}）\n`);
+  const writtenNow = result.entries.filter((entry) => entry.action === 'create' || entry.action === 'update').length;
+  const writeSummary = writtenNow > 0 ? `按当前仓库写入 ${writtenNow} 篇` : '本次没有写入任何文档';
+  process.stdout.write(`  反推工作区：${writeSummary}；仍需人工确认：${gaps.length} 处（清单：${gapsFile}）\n`);
   for (const gap of gaps.slice(0, 8)) {
     process.stdout.write(`    - ${gap.file}:${gap.line}  ${gap.text.slice(0, 80)}\n`);
   }
@@ -1106,9 +1250,15 @@ function cmdWiki(root, flags) {
       process.stdout.write(`已按 --keep 保留 ${result.conflicts.length} 篇冲突文件（人工内容未改动）\n`);
       return 0;
     }
+    const adopt = byAction('conflict').filter((entry) => entry.adoptable).length;
+    const edited = result.conflicts.length - adopt;
+    const hint = adopt > 0
+      ? `${adopt} 篇是「没有受管区块」的既有文档：重跑 --update 会补区块并原样保留正文`
+      : '受管区块被人工改过';
+    const rest = edited > 0 ? '；另有 ' + edited + ' 篇区块被人工改过' : '';
     process.stderr.write(
-      '冲突未解决：受管区块被人工改过。确认要覆盖后重跑 `--update`，' +
-        '或保留人工内容跑 `--keep` 只补缺失文件。\n'
+      `冲突未解决：${hint}${rest}。` +
+        '确认后重跑 --update，或保留人工内容跑 --keep 只补缺失文件。\n'
     );
     return 1;
   }
@@ -1123,6 +1273,8 @@ function cmdWiki(root, flags) {
 function ensurePreset(root, flags) {
   const {config} = loadConfig(root);
   if (config.presets && config.presets.prototype && config.presets.prototype.enabled) {
+    // 能力开着、但同步脚本被删过（老项目或手工清理）：先补回，否则每次同步都只剩堆栈
+    if (!flags.dryRun) ensurePrototypeCheck(root, config);
     return {config};
   }
   if (flags.dryRun) {
@@ -1225,16 +1377,12 @@ function cmdPage(root, flags) {
   }
 
   // 新建页会改变「进行中任务」集合，顺手同步总览页；同步失败不回滚页面，但要让调用方知道。
-  const sync = spawnSync(process.execPath, [path.join(root, config.paths.prototypeCheck), '--sync'], {
-    cwd: root,
-    encoding: 'utf8',
-  });
-  const syncOut = `${sync.stdout || ''}${sync.stderr || ''}`.trim();
-  if (sync.status !== 0) {
-    process.stderr.write(`  总览页同步失败（任务页已写入）：${syncOut || `退出码 ${sync.status}`}\n`);
+  const synced = syncOverview(root, config);
+  if (!synced.ok) {
+    process.stderr.write(`  总览页同步失败（任务页已写入）：${synced.message}\n`);
     return 2;
   }
-  if (syncOut) process.stdout.write(`  ${syncOut.split('\n').join('\n  ')}\n`);
+  if (synced.out) process.stdout.write(`  ${synced.out.split('\n').join('\n  ')}\n`);
   refreshPlans(root, config);
   process.stdout.write(
     `  下一步：先完善 ${path.join(ctx.paths.specs, task)}/*.md（人可改），再跑 review ${task} 复盘，` +
@@ -1266,9 +1414,9 @@ async function main(argv) {
     return 0;
   }
   if (unknown.length) return fail(unknown.join('；'));
-  if (!['init', 'agents', 'page', 'plan', 'review', 'progress', 'ui', 'check', 'doctor', 'wiki', 'plans'].includes(command)) {
+  if (!['init', 'agents', 'page', 'plan', 'review', 'progress', 'ui', 'delete', 'check', 'doctor', 'wiki', 'plans'].includes(command)) {
     return fail(
-      `未知命令：${command}（可用：init / agents / page / plan / review / progress / ui / check / doctor / wiki / plans / style / version）`
+      `未知命令：${command}（可用：init / agents / page / plan / review / progress / ui / delete / check / doctor / wiki / plans / style / version）`
     );
   }
 
@@ -1280,9 +1428,10 @@ async function main(argv) {
     if (command === 'review') return cmdReview(root, {...flags, args});
     if (command === 'progress') return cmdProgress(root, {...flags, args});
     if (command === 'ui') return cmdUi(root, {...flags, args});
+    if (command === 'delete') return cmdDelete(root, {...flags, args});
     if (command === 'check') return cmdCheck(root, flags);
     if (command === 'wiki') return cmdWiki(root, flags);
-    if (command === 'plans') return cmdPlans(root, flags);
+    if (command === 'plans') return cmdPlans(root, {...flags, args});
     return cmdDoctor(root, flags);
   } catch (err) {
     process.stderr.write(`dsh-plugin-harness-cli ${command} 失败：${err && err.message ? err.message : err}\n`);

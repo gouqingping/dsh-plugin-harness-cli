@@ -55,7 +55,7 @@ https://github.com/gouqingping/dsh-plugin-harness-cli
 
 ### One-line value
 
-Installing it gives DSH 11 `harness_cli_*` tools and 10 `/harness-cli-*` commands that generate and check a repo's Harness setup (AGENTS.md, env/scope/state/gate files, spec docs, task progress, antd-style UI specs, business wiki), so the model follows one shared spec instead of improvising.
+Installing it gives DSH 12 `harness_cli_*` tools and one aggregated `/harness-cli` command that generate and check a repo's Harness setup (AGENTS.md, env/scope/state/gate files, spec docs, task progress, antd-style UI specs, business wiki), so the model follows one shared spec instead of improvising.
 
 ### Category
 

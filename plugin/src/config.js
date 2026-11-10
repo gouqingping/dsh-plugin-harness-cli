@@ -220,6 +220,10 @@ function validateConfig(config) {
   need(toArray(config.dod).length >= 4, 'config.dod 少于 4 条，完成定义会退化成形容词');
   for (const item of toArray(config.dirs)) {
     need(isPlainObject(item) && isText(item.path), 'config.dirs 的每一项都要有 path');
+    need(
+      isPlainObject(item) && (item.name === undefined || isText(item.name)),
+      'config.dirs 的 name 是业务名（可省略），写了就必须有值'
+    );
   }
   for (const item of toArray(config.links)) {
     need(isPlainObject(item) && isText(item.path), 'config.links 的每一项都要有 path');
