@@ -43,6 +43,27 @@
   .ddd { border-left:3px solid var(--run); }
   .sdd { border-left:3px solid var(--warn); }
   .tdd { border-left:3px solid var(--ok); }
+  .actions { margin-top:10px; }
+  .btn { height:30px; padding:0 12px; border-radius:8px; border:1px solid var(--line);
+         background:#11151c; color:var(--fg); font:inherit; font-size:13px; cursor:pointer; }
+  .btn:hover { border-color:var(--run); color:#fff; }
+  .plan-modal { position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.55);
+                display:none; align-items:center; justify-content:center; padding:24px; }
+  .plan-modal.is-open { display:flex; }
+  .plan-dialog { width:min(1100px,94vw); height:min(760px,90vh); background:#fff; color:#111;
+                 border-radius:12px; display:flex; flex-direction:column; overflow:hidden;
+                 box-shadow:0 24px 80px rgba(0,0,0,.35); }
+  .plan-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid #eee; }
+  .plan-head b { font-size:14px; }
+  .plan-head .sub { color:#888; font-size:12px; }
+  .plan-head .spacer { flex:1; }
+  .plan-head a, .plan-head button { font:inherit; font-size:12px; color:#1677ff; background:none;
+                                    border:0; cursor:pointer; text-decoration:none; }
+  .plan-body { position:relative; flex:1; min-height:0; display:flex; background:#fff; }
+  .plan-body iframe { flex:1; width:100%; border:0; position:relative; z-index:1; }
+  .plan-skeleton { position:absolute; inset:0; z-index:2; background:#fff; padding:20px;
+                   transition:opacity .15s ease; }
+  .plan-skeleton.is-hidden { opacity:0; visibility:hidden; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -54,6 +75,7 @@
       最后更新：<time data-updated datetime="{{todayIso}}">{{todayIso}}</time>
       · 状态：<span data-task-status-label>进行中</span>
     </p>
+    <p class="actions"><button class="btn" id="plan-preview" type="button">方案预览</button></p>
   </header>
 
   <section class="overall">
@@ -247,6 +269,86 @@
   }
   setTimeout(check, 1200);
   setInterval(check, 3000);
+})();
+</script>
+<div class="plan-modal" id="plan-modal" aria-hidden="true">
+  <div class="plan-dialog" role="dialog" aria-modal="true" aria-label="方案预览">
+    <div class="plan-head">
+      <b>方案预览</b><span class="sub">plan.html</span><span class="spacer"></span>
+      <a id="plan-open" href="plan.html" target="_blank" rel="noopener">新窗口打开</a>
+      <button type="button" id="plan-close">关闭</button>
+    </div>
+    <div class="plan-body">
+      <div class="plan-skeleton" id="plan-skeleton" aria-hidden="true">
+        <div class="hcli-sk" style="width:220px;height:24px"></div>
+        <div class="hcli-sk" style="width:100%;height:56px"></div>
+        <div class="hcli-sk" style="width:100%;height:220px"></div>
+        <div class="hcli-sk" style="width:60%;height:18px"></div>
+      </div>
+      <iframe id="plan-frame" title="方案预览"></iframe>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var modal = document.getElementById('plan-modal');
+  var frame = document.getElementById('plan-frame');
+  var skeleton = document.getElementById('plan-skeleton');
+  var open = document.getElementById('plan-preview');
+  var close = document.getElementById('plan-close');
+  if (!modal || !frame || !open) return;
+  function show() {
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+    skeleton.classList.remove('is-hidden');
+    frame.src = 'plan.html';
+  }
+  function hide() {
+    modal.classList.remove('is-open');
+    modal.setAttribute('aria-hidden', 'true');
+    frame.src = 'about:blank';
+  }
+  open.addEventListener('click', show);
+  if (close) close.addEventListener('click', hide);
+  modal.addEventListener('click', function (e) { if (e.target === modal) hide(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+  frame.addEventListener('load', function () { skeleton.classList.add('is-hidden'); });
+})();
+</script>
+
+<noscript><style>.hcli-skeleton{display:none!important}</style></noscript>
+<style>
+  .hcli-skeleton{position:fixed;inset:0;z-index:9998;background:#f5f5f5;padding:24px;box-sizing:border-box;
+    transition:opacity .18s ease;overflow:hidden}
+  .hcli-skeleton.is-hidden{opacity:0;visibility:hidden;pointer-events:none}
+  .hcli-sk{border-radius:8px;background:linear-gradient(90deg,#ececec 25%,#f7f7f7 37%,#ececec 63%);
+    background-size:400% 100%;animation:hcli-sk 1.15s ease infinite;margin-bottom:12px}
+  @keyframes hcli-sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .hcli-sk-row{display:flex;gap:12px}
+  .hcli-sk-row .hcli-sk{flex:1;margin-bottom:0}
+</style>
+<div class="hcli-skeleton" id="hcli-skeleton" aria-hidden="true">
+  <div class="hcli-sk" style="width:220px;height:26px"></div>
+  <div class="hcli-sk" style="width:100%;height:52px"></div>
+  <div class="hcli-sk-row">
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+  </div>
+  <div class="hcli-sk" style="width:100%;height:180px"></div>
+  <div class="hcli-sk" style="width:65%;height:18px"></div>
+  <div class="hcli-sk" style="width:85%;height:18px"></div>
+</div>
+<script>
+(function(){
+  var el = document.getElementById('hcli-skeleton');
+  if (!el) return;
+  function hide() {
+    el.classList.add('is-hidden');
+    setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+  }
+  if (document.readyState === 'complete') setTimeout(hide, 300);
+  else window.addEventListener('load', function(){ setTimeout(hide, 300); });
 })();
 </script>
 </body>

@@ -10,7 +10,7 @@
 
 - 技术栈：JavaScript
 - 运行环境：Node.js >= 18（零运行时依赖）
-- 版本：0.1.3
+- 版本：0.1.5
 
 ## 2. 目录地图
 
@@ -18,6 +18,9 @@
 |---|---|
 | `plugin/bin/` | CLI 入口，只做参数转发与退出码 |
 | `plugin/src/` | 实现：渲染、配置、探测、脚手架、判定、自检 |
+| `.codex-plugin/` | Codex 插件清单：元数据、技能目录与本地 MCP 引用 |
+| `.agents/plugins/` | Codex Git 市场索引 |
+| `skills/` | Codex 技能：双宿主操作模式与 harness_cli_* 工具流程 |
 | `plugin/templates/` | 生成物模板，文案的唯一真源 |
 | `plugin/vendor/agent-style-harness/` | 随包的 harness-style（Python）：代码风格与提交信息判定，经 style 子命令调用 |
 | `plugin/tests/` | node:test 用例，含“规则会失败”的反向用例 |
@@ -42,6 +45,7 @@
 - 零运行时依赖：只用 Node 内置模块；要引入依赖先写 ADR。
 - 模板是唯一真源：文案改 templates/，不要在 src/ 里内联第二份。
 - 新增子命令必须同时补 tests/ 用例与 README 用法表。
+- 双宿主适配：DSH 的 cordis.mjs 与 Codex 的 codex-mcp.mjs 必须复用同一批 TOOL_SPECS 和 CLI 实现。
 - 判定只读：check 不写盘，修复交给 init / agents。
 - 退出码固定 0 / 1 / 2，与 harness-style 对齐，便于串进同一条门禁。
 - 并行推进靠认领：开工先 `node scripts/claim.js add <F-xxx> --owner <会话/Agent 标识> --scope <路径>`；认出上限或 scope 冲突说明该换任务，不要硬上。
@@ -49,11 +53,17 @@
 
 ## 5. 工作流
 
-1. 先读 `README.md` 与 `docs/adr/ADR-0001-harness-cli.md`，确认改动落在哪一层：模板、判定还是 CLI。
-2. 改 `plugin/templates/` 或 `plugin/src/`；新增判定必须同时加一条“它真的会失败”的用例。
-3. 跑 `node --test` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。
-4. 文案类改动只改模板，不在代码里再写一份。
-5. 行为变化同步 README 用法表与生成源 `harness-cli.json`，必要时补 ADR。
+1. 开工先读 `claude-progress.md`：恢复上次进度；有未完成任务时先继续完成，不要从零重做或另起无关任务。
+2. 开工先选操作模式（手动 / 自动 loop）；自动 loop 写入任务标记，方案确认时自动选择「确认」。
+3. 任务发起先写并确认 docs/specs/<task>/flow.md 的业务流程图；再按流程图做页面 / 交互 / 数据 / UI 设计与文档。
+4. progress.html / ui/index.html 等模板在设计内容准备好后再复制 / 补全；提前生成时必须保留骨架屏 loading。
+5. 先读 `README.md` 与 `docs/adr/ADR-0001-harness-cli.md`，确认改动落在哪一层：模板、判定还是 CLI。
+6. 改 `plugin/templates/` 或 `plugin/src/`；新增判定必须同时加一条“它真的会失败”的用例。
+7. 任务中断用 `/harness-cli continue` 从未完成处继续；要整体重来用 `/harness-cli restart`（多选：进度归零、方案待确认，再从 Step 1 重跑）。
+8. 数据库设计先写 `docs/specs/<task>/schema.sql`（表/字段用 COMMENT ON 写说明），再跑 `/harness-cli sql` 生成关系说明与数模图；ui/sql 会同步 progress 与 task_queue；删除任务用多选，进行中的任务先停止。
+9. 跑 `node --test` 与 `node plugin/bin/dsh-plugin-harness-cli.js doctor`，两者都绿才算过。
+10. 文案类改动只改模板，不在代码里再写一份。
+11. 行为变化同步 README 用法表与生成源 `harness-cli.json`，必要时补 ADR。
 
 ### 5.2 并行 loop（认领）
 
@@ -93,6 +103,7 @@
 
 - 工具说明与用法：`README.md`
 - 设计决策（零依赖 / docs 功能清单 / _VERSIONS / 状态文件保护）：`docs/adr/ADR-0001-harness-cli.md`
+- Codex 插件设计（双适配层、单业务核心、本地 MCP）：`docs/adr/ADR-0002-codex-plugin.md`
 - 模板目录（生成物文案的唯一真源）：`plugin/templates/`
 
 > 本文件超过 120 行说明写成了手册。超出部分拆到 `docs/`，在这里只留链接。

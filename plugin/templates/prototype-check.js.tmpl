@@ -230,6 +230,8 @@ function parsePage(html) {
 }
 
 const SPEC_FILES = ['proposal.md', 'spec.md', 'design.md', 'tasks.md'];
+// 指纹必须与 CLI 的 docsHash 一致：业务流程图也计入，改动后复盘/确认失效。
+const HASH_FILES = ['flow.md', ...SPEC_FILES];
 
 /** docs/specs/<任务>/ 是否存在、是否与页面一致（P17 / P18 / P19）。 */
 function checkDocs(name, page, label) {
@@ -555,7 +557,7 @@ function checkPlan(name, page, base) {
 
   // 已开工：文档必须还是「确认时那一版」，且复盘已通过
   const docsDir = path.join(ROOT, SPECS, name);
-  const docText = SPEC_FILES.map((file) => {
+  const docText = HASH_FILES.map((file) => {
     const text = readFile(path.join(docsDir, file));
     return text === null ? '' : text.replace(/\r\n/g, '\n').trim();
   }).join('\n');

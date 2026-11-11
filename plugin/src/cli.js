@@ -21,7 +21,24 @@ const style = require('./style');
 const {applyWiki, planWiki, wikiStatus, collectFacts, wikiGaps, writeGapReport, DEFAULT_DIR: WIKI_DIR} = require('./wiki');
 const {syncDesignFromUi, syncProposalFromWiki} = require('./sync');
 const {uiGaps, writeUiGapReport} = require('./ui');
-const {refreshPlans, collectTasks, servePlans, deleteTask} = require('./plans');
+const {
+  parseSchema,
+  lintModel,
+  renderMermaid,
+  renderErPage,
+  loadOverall,
+  renderOverviewPage,
+  syncDatabaseDoc,
+} = require('./db');
+const {
+  refreshPlans,
+  collectTasks,
+  servePlans,
+  deleteTask,
+  refreshDerived,
+  updateTaskQueue,
+  readTaskMode,
+} = require('./plans');
 const {defaultModel, mergeFlags, renderDocs, applyToPage, applyToPlan} = require('./specs');
 const {loadTemplate} = require('./templates');
 const {render} = require('./render');
@@ -39,7 +56,8 @@ const USAGE = `dsh-plugin-harness-cli ${VERSION} —— 公共项目配置工具
   dsh-plugin-harness-cli plan [任务名] [--confirm --by "确认人"] [--user-words "原话"]
   dsh-plugin-harness-cli progress <任务名> [--step N --pct 0..100] [--status 进行中|待验收|完成] [--note "说明"]
   dsh-plugin-harness-cli ui [任务名] [--user-words "原话"] [--force]   （省略任务名=最近的任务）
-  dsh-plugin-harness-cli delete <任务名> [--yes]                     # 删除任务页 / 设计稿 / 规范文档 / 复盘
+  dsh-plugin-harness-cli sql [任务名] [--dry-run]                   # 按 Google 数模规范生成 / 校验 schema 与 ER 数模图
+  dsh-plugin-harness-cli delete <任务名> [<任务名>...] [--yes]        # 删除任务页 / 设计稿 / 数据模型 / 规范文档 / 复盘
   dsh-plugin-harness-cli check [--strict] [--json]
   dsh-plugin-harness-cli doctor [--json]
   dsh-plugin-harness-cli plans [serve [端口] | stop]   # 省略端口=随机安全端口；指定端口被占用会强制接管
@@ -54,6 +72,13 @@ style 子命令把参数原样转给随包的 harness-style（代码风格 / 提
 ui 生成 / 更新任务页的 UI 设计稿（Ant Design v5 风格，落在 prototype/<task>/ui/）：
   --force       覆盖已存在的设计稿（默认不覆盖）
   --dry-run     只打印将写入的文件
+
+sql 数据库设计（schema.sql 是唯一真源，省略任务名=最近的任务）：
+  docs/specs/<task>/schema.sql     DDL（不覆盖已有内容）
+  docs/specs/<task>/database.md    建模说明与 Google 数模规范（不覆盖已有内容）
+  docs/specs/<task>/er.mmd         Mermaid ER 图（自动生成）
+  prototype/<task>/db/index.html   离线数模图（自动生成）
+  退出码 1 表示 schema 还是空的，或有 lint 错误；按提示补 schema.sql 后重跑。
 
 wiki 生成 / 更新 docs/wiki（13 篇业务文档，正文是业务白话，不写命令与代码）：
   --update      受管区块一律更新；没有受管区块的既有文档会补区块、正文原样保留
@@ -361,6 +386,24 @@ function cmdUi(root, flags) {
     );
   }
 
+  // UI 是任务活动：追加一条进度记录，并把状态 / 产物同步进任务队列。
+  const uiLog = appendTaskLog(
+    root,
+    config,
+    task,
+    `UI 设计稿已生成：${toPosix(path.relative(root, path.join(uiDir, 'index.html')))}`
+  );
+  if (uiLog.ok) {
+    const progressRel = toPosix(
+      path.relative(root, path.join(uiDir, '..', ctx.prototype.progressPage || 'progress.html'))
+    );
+    process.stdout.write(`  LOG     ${progressRel}（UI 设计记录）\n`);
+  }
+  syncTaskQueue(root, config, task, [
+    toPosix(path.relative(root, path.join(uiDir, 'index.html'))),
+    toPosix(path.relative(root, path.join(uiDir, 'README.md'))),
+  ]);
+
   // 让总览页的「UI」列立即正确
   const synced = syncOverview(root, config);
   if (!synced.ok) {
@@ -384,8 +427,190 @@ function cmdUi(root, flags) {
   return 0;
 }
 
+/**
+ * sql：数据库设计（schema.sql 是唯一真源）。
+ * - 第一次运行：补任务页 / 四份文档 / schema.sql 骨架 / database.md 模板；
+ * - 之后每次运行：解析 schema.sql、按 Google 数模规范 lint，并重新生成 er.mmd 与 db/index.html。
+ */
+function cmdSql(root, flags) {
+  let pickedConfig;
+  try {
+    pickedConfig = loadConfig(root).config;
+  } catch (error) {
+    return fail(error.message);
+  }
+  const picked = resolveTaskOrRecent(root, flags, pickedConfig, 'sql');
+  if (picked.error) return fail(picked.error);
+  const task = picked.task;
+
+  const ready = ensureTask(root, flags, task);
+  if (ready.error) return ready.error;
+  if (ready.dryRun) {
+    process.stdout.write(`（dry-run）将创建 ${task} 的数据库设计骨架（schema.sql / database.md / db/index.html）\n`);
+    return 0;
+  }
+  const config = ready.config;
+  const ctx = buildContext(config, {task});
+  const specDir = path.join(root, config.paths.specs || 'docs/specs', task);
+  const dbDir = path.join(root, ctx.prototype.dir, task, 'db');
+  const schemaFile = path.join(specDir, 'schema.sql');
+  const docFile = path.join(specDir, 'database.md');
+  const mmdFile = path.join(specDir, 'er.mmd');
+  const pageFile = path.join(dbDir, 'index.html');
+
+  const created = [];
+  if (!exists(schemaFile)) {
+    writeFileSafe(schemaFile, render(loadTemplate('schemaSql'), ctx));
+    created.push(['CREATE', schemaFile]);
+  }
+  if (!exists(docFile)) {
+    writeFileSafe(docFile, render(loadTemplate('databaseDoc'), ctx));
+    created.push(['CREATE', docFile]);
+  }
+
+  const model = parseSchema(fs.readFileSync(schemaFile, 'utf8'));
+  // 先合并所有任务的表名：跨任务外键的目标表在别的 schema.sql 里，
+  // 不能把「本任务没有这张表」误报成 DB005。
+  const overall = loadOverall(root, config);
+  const ownTables = new Set(model.tables.map((item) => item.name));
+  const externalTables = new Set(
+    overall.tables.filter((item) => !ownTables.has(item.name)).map((item) => item.name)
+  );
+  // 跨任务外键：本任务 schema 引用另一个任务的表时，单任务图也要把关系说清楚（标记为外部表）。
+  const externalRelations = [];
+  for (const table of model.tables) {
+    for (const column of table.columns) {
+      if (!column.fk || ownTables.has(column.fk.table)) continue;
+      const target = overall.tables.find((item) => item.name === column.fk.table);
+      if (!target) continue;
+      let targetColumn = column.fk.column;
+      if (!targetColumn && target.primaryKey.length === 1) targetColumn = target.primaryKey[0];
+      if (!targetColumn) continue;
+      const targetColumnInfo = target.columns.find((item) => item.name === targetColumn);
+      externalRelations.push({
+        from: table.name,
+        fromColumn: column.name,
+        to: target.name,
+        toColumn: targetColumn,
+        oneToOne: Boolean(
+          column.unique || (table.primaryKey.length === 1 && table.primaryKey[0] === column.name)
+        ),
+        external: true,
+        targetDescription: target.description || '',
+        targetColumnDescription: targetColumnInfo ? targetColumnInfo.description || '' : '',
+      });
+    }
+  }
+  const lint = lintModel(model, {externalTables});
+  const full = {...model, relations: [...model.relations, ...externalRelations], ...lint};
+  // 把 schema.sql 的 COMMENT / 行尾说明反填进 database.md 的受管区块。
+  writeFileSafe(docFile, syncDatabaseDoc(readIfExistsFile(docFile) || '', full));
+  const meta = {
+    task,
+    project: config.project.name,
+    generatedAt: new Date().toISOString(),
+    schemaPath: toPosix(path.relative(root, schemaFile)),
+    mermaidPath: toPosix(path.relative(root, mmdFile)),
+  };
+  writeFileSafe(mmdFile, renderMermaid(full));
+  writeFileSafe(pageFile, renderErPage(full, meta));
+
+  // 整体数模图：把所有任务的 schema 合并成一张可拖拽布局的预览页。
+  const overviewFile = path.join(root, ctx.prototype.dir, 'db.html');
+  writeFileSafe(overviewFile, renderOverviewPage(overall, {generatedAt: meta.generatedAt}));
+
+  const files = {
+    schema: toPosix(path.relative(root, schemaFile)),
+    doc: toPosix(path.relative(root, docFile)),
+    mermaid: toPosix(path.relative(root, mmdFile)),
+    page: toPosix(path.relative(root, pageFile)),
+    overview: toPosix(path.relative(root, overviewFile)),
+  };
+
+  const sqlLog = appendTaskLog(
+    root,
+    config,
+    task,
+    `数据库设计已生成：${model.tables.length} 张表 / ${full.relations.length} 条关系（${files.schema}）`
+  );
+  const queue = syncTaskQueue(root, config, task, [
+    files.schema,
+    files.doc,
+    files.mermaid,
+    files.page,
+    files.overview,
+  ]);
+  const overviewSync = syncOverview(root, config);
+  if (!overviewSync.ok) process.stderr.write(`  总览页同步失败（数模图已写入）：${overviewSync.message}\n`);
+  // plans.html 也要能直接预览数模图 / 数模文档：刷新任务总览。
+  refreshPlans(root, config);
+
+  if (flags.json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          root,
+          task,
+          files,
+          created: created.map(([, file]) => toPosix(path.relative(root, file))),
+          tables: model.tables.length,
+          relations: full.relations.length,
+          errors: lint.errors,
+          warnings: lint.warnings,
+          overview: {
+            file: files.overview,
+            tables: overall.counts.tables,
+            relations: overall.counts.relations,
+            conflicts: overall.counts.conflicts,
+          },
+          log: {ok: sqlLog.ok},
+          queue: {ok: queue.ok, skipped: queue.skipped || null},
+        },
+        null,
+        2
+      )}\n`
+    );
+    return lint.errors.length === 0 ? 0 : 1;
+  }
+
+  process.stdout.write(`dsh-plugin-harness-cli sql → ${task}\n`);
+  for (const [action, file] of created) {
+    process.stdout.write(`  ${pad(action, 7)} ${toPosix(path.relative(root, file))}\n`);
+  }
+  const externalCount = full.relations.filter((relation) => relation.external).length;
+  process.stdout.write(
+    `  ${pad(model.tables.length > 0 ? 'RENDER' : 'WAIT', 7)} ${files.mermaid}（${model.tables.length} 张表 / ` +
+      `${full.relations.length} 条关系${externalCount > 0 ? `，其中外部 ${externalCount} 条` : ''}）\n`
+  );
+  process.stdout.write(`  RENDER  ${files.page}（离线数模图）\n`);
+  process.stdout.write(
+    `  RENDER  ${files.overview}（整体：${overall.counts.tables} 表 / ${overall.counts.relations} 关系` +
+      `${overall.counts.conflicts > 0 ? ` / ${overall.counts.conflicts} 冲突` : ''}）\n`
+  );
+  if (sqlLog.ok) {
+    const progressRel = toPosix(
+      path.relative(root, path.join(root, ctx.prototype.dir, task, ctx.prototype.progressPage || 'progress.html'))
+    );
+    process.stdout.write(`  LOG     ${progressRel}（数模设计记录）\n`);
+  }
+  if (queue.ok) process.stdout.write(`  QUEUE   ${config.paths.taskQueue}（${task}）\n`);
+  process.stdout.write(`  数模检查：错误 ${lint.errors.length}，警告 ${lint.warnings.length}\n`);
+  const issues = [...lint.errors, ...lint.warnings];
+  for (const issue of issues.slice(0, 12)) {
+    process.stdout.write(`    ${pad(issue.level === 'error' ? 'ERR' : 'WARN', 5)} ${issue.id} ${issue.message}\n`);
+    if (issue.hint) process.stdout.write(`         ↳ ${issue.hint}\n`);
+  }
+  if (issues.length > 12) process.stdout.write(`    … 其余 ${issues.length - 12} 处见上方规则\n`);
+  process.stdout.write(
+    lint.errors.length === 0
+      ? `  下一步：把 ${files.page} 发给需要评审的人；schema.sql 再改时重跑本命令刷新数模图。\n`
+      : `  下一步：补全 ${files.schema}（或修 lint 错误），再跑 /harness-cli sql ${task}。\n`
+  );
+  return lint.errors.length === 0 ? 0 : 1;
+}
+
 /** 规范文档的顺序固定：指纹与复盘都以这个顺序计算。 */
-const SPEC_DOC_FILES = ['proposal.md', 'spec.md', 'design.md', 'tasks.md'];
+const SPEC_DOC_FILES = ['flow.md', 'proposal.md', 'spec.md', 'design.md', 'tasks.md'];
 
 /**
  * 计算 docs/specs/<任务>/ 四份文档的指纹（sha1）。
@@ -668,7 +893,13 @@ function cmdPlan(root, flags) {
     rows.push(`  KEEP    ${path.relative(root, pageFile)}（已有进度 ${total}%，不覆盖；要重写加 --force）`);
   }
 
-  const planHtml = readIfExistsFile(planFile) || '';
+  let planHtml = readIfExistsFile(planFile) || '';
+  if (planHtml.length > 0 && !/id="business-flow"/.test(planHtml)) {
+    // 老任务升级：从当前模板取「业务流程图」区块插到目标前，再由 applyToPlan 填内容。
+    const fresh = render(loadTemplate('prototypePlan'), ready.ctx);
+    const section = /(<section id="business-flow"[\s\S]*?<\/section>)/.exec(fresh);
+    if (section) planHtml = planHtml.replace(/(<section id="goal")/, `${section[1]}\n\n  $1`);
+  }
   if (planHtml.length > 0 && (!/data-plan-status="已确认"/.test(planHtml) || flags.force)) {
     model.hasUi = exists(path.join(root, ready.ctx.prototype.dir, task, 'ui', 'index.html'));
     writeFileSafe(planFile, applyToPlan(planHtml, model));
@@ -692,7 +923,11 @@ function cmdPlan(root, flags) {
   }
 
   if (flags.confirm) {
-    const by = String(flags.by || '').trim();
+    let by = String(flags.by || '').trim();
+    if (by.length === 0 && readTaskMode(root, ready.config, task) === 'auto') {
+      // 任务开始前选的是自动 loop：确认方案时自动选择「确认」，不需要再弹窗。
+      by = '自动 loop';
+    }
     if (by.length === 0) return fail('--confirm 需要 --by "确认人"（谁确认的方案）');
 
     // 先定稿 docs/specs，再复盘，最后才允许确认
@@ -718,10 +953,12 @@ function cmdPlan(root, flags) {
     }
     html = html
       .replace(/data-plan-status="[^"]*"/, 'data-plan-status="已确认"')
+      .replace(/data-flow-status="[^"]*"/, 'data-flow-status="已确认"')
       .replace(/data-confirmed-by="[^"]*"/, `data-confirmed-by="${safeBy}"`)
       .replace(/data-confirmed-at="[^"]*"/, `data-confirmed-at="${now}"`)
       .replace(/data-docs-hash="[^"]*"/, `data-docs-hash="${hash}"`)
       .replace(/data-plan-status-label>待确认</, 'data-plan-status-label>已确认<')
+      .replace(/data-flow-status-label>待确认</, 'data-flow-status-label>已确认<')
       .replace(/data-confirmed-by-label>—</, `data-confirmed-by-label>${safeBy}<`)
       .replace(/data-confirmed-at-label>—</, `data-confirmed-at-label>${now}<`);
     writeFileSafe(planFile, html);
@@ -782,6 +1019,56 @@ function syncOverview(root, config) {
     message: `${first}；跑 dsh-plugin-harness-cli init 重新生成 ${config.paths.prototypeCheck} 后重试`,
     out,
   };
+}
+
+/** 读任务页当前状态与总进度（给进度日志 / 任务队列共用）。 */
+function taskSnapshot(root, config, task) {
+  const preset = (config.presets && config.presets.prototype) || {};
+  const page = path.join(root, preset.dir || 'prototype', task, preset.progressPage || 'progress.html');
+  const html = readIfExistsFile(page) || '';
+  return {
+    page,
+    html,
+    status: (/data-task-status="([^"]*)"/.exec(html) || [])[1] || '进行中',
+    total: totalOf(readStepPcts(html)),
+  };
+}
+
+/**
+ * 往任务页的 log-list 追加一条活动记录（不改进度百分比）。
+ * ui / sql 这类「生成了设计资产」的动作要留痕，但不能伪造步骤进度。
+ */
+function appendTaskLog(root, config, task, note) {
+  const snapshot = taskSnapshot(root, config, task);
+  if (snapshot.html === '') return {ok: false};
+  const now = new Date().toISOString();
+  const safe = String(note || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const entry = `<li data-at="${now}" data-total="${snapshot.total}">${safe}</li>`;
+  let html = snapshot.html.replace(
+    /(<ul[^>]*class="[^"]*\blog-list\b[^"]*"[^>]*>)([\s\S]*?)(<\/ul>)/,
+    (match, open, body, close) => `${open}${body.replace(/\s+$/, '')}\n      ${entry}\n    ${close}`
+  );
+  html = html.replace(
+    /(<time[^>]*data-updated[^>]*datetime=")[^"]*(">)[^<]*(<\/time>)/,
+    `$1${now}$2${now}$3`
+  );
+  writeFileSafe(snapshot.page, html);
+  return {ok: true, status: snapshot.status, total: snapshot.total};
+}
+
+/** 把任务状态 / 进度 / 产物写进 task_queue.json（队列失败只告警，不拦主命令）。 */
+function syncTaskQueue(root, config, task, artifacts) {
+  const snapshot = taskSnapshot(root, config, task);
+  const result = updateTaskQueue(root, config, task, {
+    status: snapshot.status,
+    progress: snapshot.total,
+    artifacts,
+  });
+  if (!result.ok) process.stderr.write(`  任务队列更新失败：${result.error}\n`);
+  return result;
 }
 
 function cmdProgress(root, flags) {
@@ -871,6 +1158,11 @@ function cmdProgress(root, flags) {
   html = html.replace(/(<time[^>]*data-updated[^>]*datetime=")[^"]*(">)[^<]*(<\/time>)/, `$1${now}$2${now}$3`);
   writeFileSafe(pageFile, html);
 
+  // 队列里的同一条任务记录跟着进度走（只更新已存在的条目，不凭空建队列）。
+  const currentStatus = (/data-task-status="([^"]*)"/.exec(html) || [])[1] || '进行中';
+  const queue = updateTaskQueue(root, config, task, {status: currentStatus, progress: total, create: false});
+  if (!queue.ok) process.stderr.write(`  任务队列更新失败：${queue.error}\n`);
+
   // 总览页由项目里的同步脚本重算；脚本缺失时先补回来，否则任务页更新了、总览却不动。
   const synced = syncOverview(root, config);
   if (!synced.ok) {
@@ -890,36 +1182,60 @@ function cmdProgress(root, flags) {
 }
 
 /**
- * 删除任务：任务页、设计稿、规范文档、复盘。
+ * 删除任务：任务页、设计稿、数据模型、规范文档、复盘；支持一次删多个。
  * 不可逆，所以默认只「预演」并退出 1；确认后带 --yes 才真的删。
  */
 function cmdDelete(root, flags) {
-  const task = flags.args && flags.args[0];
-  if (!isText(task)) return fail('用法：dsh-plugin-harness-cli delete <任务名> [--yes]');
-  if (!isTaskName(task)) {
-    return fail(`任务名只能用字母 / 数字 / 中文 / 中划线 / 下划线（不能有空格或斜杠）：${task}`);
+  const tasks = [...new Set((flags.args || []).filter((item) => isText(item)).map((item) => item.trim()))];
+  if (tasks.length === 0) return fail('用法：dsh-plugin-harness-cli delete <任务名> [<任务名>...] [--yes]');
+  const invalid = tasks.find((task) => !isTaskName(task));
+  if (invalid !== undefined) {
+    return fail(`任务名只能用字母 / 数字 / 中文 / 中划线 / 下划线（不能有空格或斜杠）：${invalid}`);
   }
   const {config} = loadConfig(root);
   const proto = (config.presets && config.presets.prototype) || {};
-  const pageDir = path.join(root, proto.dir || 'prototype', task);
-  const specDir = path.join(root, config.paths.specs || 'docs/specs', task);
-  const targets = [pageDir, specDir].filter((dir) => isDir(dir));
-  if (targets.length === 0) {
-    return refuse(`任务「${task}」不存在：没有 ${toPosix(path.relative(root, pageDir))}/ 或 ${toPosix(path.relative(root, specDir))}/`);
+  const rows = tasks.map((task) => {
+    const pageDir = path.join(root, proto.dir || 'prototype', task);
+    const specDir = path.join(root, config.paths.specs || 'docs/specs', task);
+    return {task, targets: [pageDir, specDir].filter((dir) => isDir(dir))};
+  });
+  const found = rows.filter((row) => row.targets.length > 0);
+  if (found.length === 0) {
+    return refuse(`任务不存在：${tasks.map((task) => `「${task}」`).join('、')}`);
   }
 
   if (!flags.yes) {
-    process.stdout.write(`dsh-plugin-harness-cli delete → ${task}（预演，未删除）\n`);
-    for (const dir of targets) process.stdout.write(`  将删除  ${toPosix(path.relative(root, dir))}/\n`);
+    process.stdout.write(`dsh-plugin-harness-cli delete → ${found.map((row) => row.task).join('、')}（预演，未删除）\n`);
+    for (const row of rows) {
+      if (row.targets.length === 0) {
+        process.stdout.write(`  SKIP    ${row.task}（不存在）\n`);
+        continue;
+      }
+      for (const dir of row.targets) process.stdout.write(`  将删除  ${toPosix(path.relative(root, dir))}/\n`);
+    }
     process.stderr.write('删除不可逆：确认后加 --yes 重跑，或在对话里用弹窗确认。\n');
     return 1;
   }
 
-  const result = deleteTask(root, config, task);
-  process.stdout.write(`dsh-plugin-harness-cli delete → ${task}\n`);
-  for (const dir of result.removed) process.stdout.write(`  REMOVED ${dir}/\n`);
-  process.stdout.write('  已刷新任务总览（plans.html 与 prototype/progress.html）\n');
-  return 0;
+  process.stdout.write(`dsh-plugin-harness-cli delete → ${found.map((row) => row.task).join('、')}\n`);
+  let code = 0;
+  for (const row of rows) {
+    if (row.targets.length === 0) {
+      process.stdout.write(`  SKIP    ${row.task}（不存在）\n`);
+      code = 1;
+      continue;
+    }
+    const result = deleteTask(root, config, row.task, {deferRefresh: true});
+    for (const dir of result.removed) process.stdout.write(`  REMOVED ${dir}/\n`);
+  }
+  const derived = refreshDerived(root, config, {wiki: true});
+  process.stdout.write(
+    '  已同步：plans.html / prototype/progress.html / prototype/db.html / db-layout.json / docs/wiki\n'
+  );
+  if (derived.wiki && derived.wiki.status !== 0) {
+    process.stderr.write(`  WARN    docs/wiki 同步失败（wiki 退出码 ${derived.wiki.status}）；任务删除已完成\n`);
+  }
+  return code;
 }
 
 function readIfExistsFile(file) {
@@ -1318,6 +1634,7 @@ function cmdPage(root, flags) {
   // 规范文档跟着任务一起落盘：proposal / spec / design / tasks（已存在的一律不覆盖）。
   const specsDir = path.join(root, ctx.paths.specs || 'docs/specs', task);
   const specFiles = [
+    ['flow.md', 'flow'],
     ['proposal.md', 'specProposal'],
     ['spec.md', 'specSpec'],
     ['design.md', 'specDesign'],
@@ -1414,9 +1731,9 @@ async function main(argv) {
     return 0;
   }
   if (unknown.length) return fail(unknown.join('；'));
-  if (!['init', 'agents', 'page', 'plan', 'review', 'progress', 'ui', 'delete', 'check', 'doctor', 'wiki', 'plans'].includes(command)) {
+  if (!['init', 'agents', 'page', 'plan', 'review', 'progress', 'ui', 'sql', 'delete', 'check', 'doctor', 'wiki', 'plans'].includes(command)) {
     return fail(
-      `未知命令：${command}（可用：init / agents / page / plan / review / progress / ui / delete / check / doctor / wiki / plans / style / version）`
+      `未知命令：${command}（可用：init / agents / page / plan / review / progress / ui / sql / delete / check / doctor / wiki / plans / style / version）`
     );
   }
 
@@ -1428,6 +1745,7 @@ async function main(argv) {
     if (command === 'review') return cmdReview(root, {...flags, args});
     if (command === 'progress') return cmdProgress(root, {...flags, args});
     if (command === 'ui') return cmdUi(root, {...flags, args});
+    if (command === 'sql') return cmdSql(root, {...flags, args});
     if (command === 'delete') return cmdDelete(root, {...flags, args});
     if (command === 'check') return cmdCheck(root, flags);
     if (command === 'wiki') return cmdWiki(root, flags);

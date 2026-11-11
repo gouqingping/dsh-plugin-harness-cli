@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="zh-CN" data-design-system="antd" data-db-overview="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{project}} · 整体数模设计图</title>
+<!--
+  整体数模图：把所有任务的 docs/specs/<任务>/schema.sql 合并成一张可交互的 ER 图。
+  - 实体可拖动，画布可缩放 / 平移；布局可保存到 prototype/db-layout.json（plans serve 时）
+    或浏览器 localStorage；也可复制 / 导入布局 JSON。
+  - schema.sql 仍是唯一真源；本页只调整展示布局，不修改 schema。
+  - 本文件由 dsh-plugin-harness-cli sql 生成，不要手改。
+-->
+<style>
+  :root {
+    --ant-color-primary:#1677ff; --ant-color-success:#52c41a; --ant-color-warning:#faad14;
+    --ant-color-error:#ff4d4f; --ant-color-text:rgba(0,0,0,.88); --ant-color-text-secondary:rgba(0,0,0,.65);
+    --ant-color-text-tertiary:rgba(0,0,0,.45); --ant-color-border:#d9d9d9; --ant-color-border-secondary:#f0f0f0;
+    --ant-color-bg-container:#fff; --ant-color-bg-layout:#f5f5f5; --ant-border-radius:6px; --ant-border-radius-lg:8px;
+    --ant-box-shadow:0 1px 2px rgba(0,0,0,.03),0 1px 6px -1px rgba(0,0,0,.02);
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--ant-color-bg-layout); color:var(--ant-color-text);
+         font:14px/1.5714 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+         background:rgba(0,0,0,.06); border-radius:4px; padding:0 4px; }
+  main { max-width:1440px; margin:0 auto; padding:16px; }
+  header.page { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; flex-wrap:wrap;
+                background:var(--ant-color-bg-container); border-radius:var(--ant-border-radius-lg);
+                box-shadow:var(--ant-box-shadow); padding:14px 20px; margin-bottom:12px; }
+  h1 { font-size:20px; margin:0; }
+  .meta { color:var(--ant-color-text-secondary); font-size:13px; margin:4px 0 0; }
+  .stats { display:flex; gap:18px; flex-wrap:wrap; }
+  .stat { text-align:right; min-width:56px; }
+  .stat b { display:block; font-size:20px; line-height:1.2; font-variant-numeric:tabular-nums; }
+  .stat span { color:var(--ant-color-text-secondary); font-size:12px; }
+  .stat.error b { color:var(--ant-color-error); }
+  .stat.warn b { color:var(--ant-color-warning); }
+  .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 12px; margin-bottom:12px;
+             background:var(--ant-color-bg-container); border-radius:var(--ant-border-radius-lg);
+             box-shadow:var(--ant-box-shadow); position:relative; z-index:20; }
+  .toolbar .spacer { flex:1 1 auto; }
+  .btn { height:32px; padding:4px 12px; border-radius:var(--ant-border-radius); border:1px solid var(--ant-color-border);
+         background:#fff; color:var(--ant-color-text); cursor:pointer; font:inherit; font-size:13px; }
+  .btn:hover { border-color:var(--ant-color-primary); color:var(--ant-color-primary); }
+  .btn-primary { background:var(--ant-color-primary); border-color:var(--ant-color-primary); color:#fff; }
+  .btn-primary:hover { background:#4096ff; color:#fff; }
+  .btn-sm { height:28px; padding:0 8px; font-size:12px; }
+  .filter { position:relative; }
+  .filter summary { height:32px; line-height:30px; padding:0 12px; border:1px solid var(--ant-color-border);
+                    border-radius:var(--ant-border-radius); background:#fff; cursor:pointer; font-size:13px; list-style:none; }
+  .filter summary::-webkit-details-marker { display:none; }
+  .filter[open] summary { border-color:var(--ant-color-primary); color:var(--ant-color-primary); }
+  .filter-panel { position:absolute; top:38px; left:0; z-index:30; width:300px; max-height:320px; overflow:auto;
+                  background:#fff; border:1px solid var(--ant-color-border); border-radius:var(--ant-border-radius-lg);
+                  box-shadow:0 8px 28px rgba(0,0,0,.16); padding:8px; }
+  .filter-row { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:4px; font-size:13px; }
+  .filter-row:hover { background:#fafafa; }
+  .filter-row input { margin:0; }
+  .filter-row .tag { margin-left:auto; color:var(--ant-color-text-tertiary); font-size:12px; }
+  .filter-actions { display:flex; gap:8px; padding:4px 8px 8px; border-bottom:1px solid var(--ant-color-border-secondary); margin-bottom:4px; }
+  .status { color:var(--ant-color-text-secondary); font-size:12px; margin-left:8px; }
+  .panel { margin-bottom:12px; background:#fff; border-radius:var(--ant-border-radius-lg); box-shadow:var(--ant-box-shadow);
+           padding:10px 14px; border-left:3px solid var(--ant-color-warning); }
+  .panel.error { border-left-color:var(--ant-color-error); }
+  .panel summary { cursor:pointer; font-weight:600; }
+  .panel ul { margin:8px 0 0; padding-left:20px; color:var(--ant-color-text-secondary); font-size:13px; }
+  .panel li { margin:3px 0; }
+  .panel li b { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin-right:6px; }
+  .hint { color:var(--ant-color-text-tertiary); font-size:12px; margin:6px 0 12px; }
+  #viewport { position:relative; height:calc(100vh - 300px); min-height:520px; overflow:hidden;
+              border:1px solid var(--ant-color-border); border-radius:var(--ant-border-radius-lg);
+              background-color:#fafafa;
+              background-image:radial-gradient(rgba(0,0,0,.08) 1px, transparent 1px);
+              background-size:20px 20px; touch-action:none; cursor:grab; }
+  #viewport.is-panning { cursor:grabbing; }
+  #canvas { position:relative; transform-origin:0 0; width:640px; height:480px; }
+  #edges { position:absolute; left:0; top:0; width:100%; height:100%; overflow:visible; z-index:0; pointer-events:none; }
+  .er-line { fill:none; stroke:#8c8c8c; stroke-width:1.5; }
+  .er-line.is-one { stroke-dasharray:4 3; }
+  .er-label { font-size:11px; fill:#8c8c8c; text-anchor:middle; paint-order:stroke;
+              stroke:#fff; stroke-width:3; stroke-linejoin:round; }
+  .entity { position:absolute; left:0; top:0; width:280px; visibility:hidden; background:#fff;
+            border:1px solid var(--ant-color-border); border-radius:var(--ant-border-radius-lg);
+            box-shadow:var(--ant-box-shadow); overflow:hidden; z-index:1; cursor:grab;
+            touch-action:none; user-select:none; }
+  .entity.is-dragging { cursor:grabbing; z-index:10; box-shadow:0 12px 32px rgba(0,0,0,.22); }
+  .entity.is-conflict { border-color:var(--ant-color-error); }
+  .entity > header { display:flex; align-items:flex-start; gap:8px; padding:9px 12px; background:#fafafa;
+                     border-bottom:1px solid var(--ant-color-border-secondary); }
+  .entity > header b { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; line-height:18px; }
+  .entity .task-badges { margin-left:auto; display:flex; flex-wrap:wrap; gap:3px; justify-content:flex-end; }
+  .entity .task-badge { font-style:normal; font-size:10px; line-height:16px; padding:0 4px; border-radius:3px;
+                        color:#0958d9; background:#e6f4ff; border:1px solid #91caff; white-space:nowrap; }
+  .entity ul { list-style:none; margin:0; padding:0; }
+  .entity li { display:flex; flex-wrap:wrap; align-items:center; gap:2px 6px; padding:5px 12px;
+               border-bottom:1px dashed var(--ant-color-border-secondary); font-size:12.5px; }
+  .entity li:last-child { border-bottom:0; }
+  .entity li.is-pk { background:#f0f7ff; }
+  .entity li.is-conflict { background:#fff1f0; }
+  .entity-desc { margin:0; padding:7px 12px; color:var(--ant-color-text-secondary); font-size:11.5px;
+                 line-height:1.45; border-bottom:1px dashed var(--ant-color-border-secondary); }
+  .col-line { display:flex; align-items:center; gap:6px; width:100%; }
+  .col-desc { width:100%; color:var(--ant-color-text-secondary); font-size:11px; line-height:1.4; }
+  .col-desc.is-missing { color:var(--ant-color-text-tertiary); font-style:italic; }
+  .col-name { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:600; white-space:nowrap; }
+  .col-type { color:var(--ant-color-text-tertiary); font-size:11px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badges { margin-left:auto; display:flex; gap:3px; flex:0 0 auto; }
+  .badge { font-style:normal; font-size:10px; line-height:15px; padding:0 4px; border-radius:3px;
+           border:1px solid transparent; white-space:nowrap; }
+  .badge.pk { color:#0958d9; background:#e6f4ff; border-color:#91caff; }
+  .badge.fk { color:#d46b08; background:#fff7e6; border-color:#ffd591; }
+  .badge.uk { color:#531dab; background:#f9f0ff; border-color:#d3adf7; }
+  .badge.nn { color:#389e0d; background:#f6ffed; border-color:#b7eb8f; }
+  .badge.conflict { color:#cf1322; background:#fff1f0; border-color:#ffa39e; }
+  .empty { background:#fff; border-radius:var(--ant-border-radius-lg); box-shadow:var(--ant-box-shadow);
+           padding:48px 24px; text-align:center; }
+  .meta-table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  .meta-table th, .meta-table td { text-align:left; padding:8px 10px; vertical-align:top;
+                                   border-bottom:1px solid var(--ant-color-border-secondary); }
+  .meta-table th { background:#fafafa; font-weight:600; white-space:nowrap; }
+  .meta-table code { white-space:nowrap; }
+  .schema-block { border:1px solid var(--ant-color-border-secondary); border-radius:var(--ant-border-radius);
+                  padding:8px 12px; margin-top:8px; background:#fafafa; }
+  .schema-block summary { cursor:pointer; font-weight:600; font-size:13px; }
+  .schema-block pre { margin:8px 0 0; background:#fff; border:1px solid var(--ant-color-border-secondary);
+                      border-radius:6px; padding:10px 12px; overflow:auto; font-size:12px; line-height:1.5; }
+  .empty h2 { margin:0 0 8px; font-size:18px; }
+  footer { color:var(--ant-color-text-tertiary); font-size:12px; margin-top:10px; }
+  @media (max-width:720px) {
+    main { padding:8px; }
+    #viewport { height:calc(100vh - 260px); }
+    .stat { min-width:44px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <div>
+      <h1>{{project}} · 整体数模设计图</h1>
+      <p class="meta">生成时间 {{generatedAt}} · 已生成 schema 的任务 {{taskCount}} 个 · 拖动实体可手动调整布局</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>{{tableCount}}</b><span>表</span></div>
+      <div class="stat"><b>{{columnCount}}</b><span>字段</span></div>
+      <div class="stat"><b>{{relationCount}}</b><span>关系</span></div>
+      <div class="stat"><b>{{taskCount}}</b><span>任务</span></div>
+      <div class="stat warn"><b>{{conflictCount}}</b><span>冲突</span></div>
+      <div class="stat error"><b>{{errorCount}}</b><span>错误</span></div>
+    </div>
+  </header>
+
+  {{#if hasTables}}
+  <div class="toolbar">
+    <details class="filter">
+      <summary>任务筛选（{{taskCount}}）</summary>
+      <div class="filter-panel">
+        <div class="filter-actions">
+          <button type="button" class="btn btn-sm" id="selectAll">全选</button>
+          <button type="button" class="btn btn-sm" id="selectNone">全不选</button>
+        </div>
+        {{#each tasks}}
+        <label class="filter-row">
+          <input type="checkbox" data-task-filter="{{name}}" checked>
+          <span>{{name}}</span>
+          <span class="tag">{{status}} · {{tableCount}} 表</span>
+        </label>
+        {{/each}}
+      </div>
+    </details>
+    <button type="button" class="btn" id="autoLayout">自动布局</button>
+    <button type="button" class="btn" id="fit">适应窗口</button>
+    <button type="button" class="btn" id="zoomOut" title="缩小">－</button>
+    <span class="status" id="zoomLabel">100%</span>
+    <button type="button" class="btn" id="zoomIn" title="放大">＋</button>
+    <span class="spacer"></span>
+    <button type="button" class="btn btn-primary" id="saveLayout">保存布局</button>
+    <button type="button" class="btn" id="copyLayout">复制 JSON</button>
+    <button type="button" class="btn" id="importLayout">导入布局</button>
+    <button type="button" class="btn" id="resetLayout">恢复自动布局</button>
+    <input type="file" id="layoutFile" accept="application/json,.json" hidden>
+    <span class="status" id="status"></span>
+  </div>
+
+  {{#if conflicts}}
+  <details class="panel">
+    <summary>跨任务同名表冲突 {{conflictCount}} 处（保留先出现的定义，仅标记差异）</summary>
+    <ul>
+      {{#each conflicts}}
+      <li><b>{{table}}</b>{{detail}}</li>
+      {{/each}}
+    </ul>
+  </details>
+  {{/if}}
+  {{#if issues}}
+  <details class="panel error">
+    <summary>整体规范检查：错误 {{errorCount}} · 警告 {{warningCount}}</summary>
+    <ul>
+      {{#each issues}}
+      <li><b>{{id}}</b>{{message}}</li>
+      {{/each}}
+    </ul>
+  </details>
+  {{/if}}
+  {{#if missing}}
+  <p class="hint">以下任务还没有 schema.sql（未纳入整体图）：
+    {{#each missing}}<span>{{this}}</span> {{/each}}
+  </p>
+  {{/if}}
+
+  <div id="viewport" aria-label="整体数模图画布">
+    <div id="canvas">
+      <svg id="edges" aria-hidden="true">
+        <defs>
+          <marker id="er-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8c8c8c"></path>
+          </marker>
+        </defs>
+      </svg>
+      {{#each tables}}
+      <article class="entity{{#if conflict}} is-conflict{{/if}}" data-table="{{name}}" data-tasks="{{taskAttr}}">
+        <header>
+          <b>{{name}}</b>
+          <span class="task-badges">
+            {{#each taskList}}<i class="task-badge">{{this}}</i>{{/each}}
+          </span>
+        </header>
+        {{#if description}}<p class="entity-desc">{{description}}</p>{{/if}}
+        <ul>
+          {{#each columns}}
+          <li data-col="{{name}}"{{#if pk}} class="is-pk"{{/if}}{{#if conflict}} class="is-conflict"{{/if}}>
+            <div class="col-line">
+              <span class="col-name">{{name}}</span>
+              <span class="col-type">{{type}}</span>
+              <span class="badges">
+                {{#if pk}}<i class="badge pk">PK</i>{{/if}}
+                {{#if fk}}<i class="badge fk">FK</i>{{/if}}
+                {{#if unique}}<i class="badge uk">UK</i>{{/if}}
+                {{#if notNull}}<i class="badge nn">NN</i>{{/if}}
+                {{#if conflict}}<i class="badge conflict">!</i>{{/if}}
+              </span>
+            </div>
+            <div class="col-desc{{#unless description}} is-missing{{/unless}}">{{#if description}}{{description}}{{/if}}{{#unless description}}缺说明{{/unless}}</div>
+          </li>
+          {{/each}}
+        </ul>
+      </article>
+      {{/each}}
+    </div>
+  </div>
+  <p class="hint">拖动实体调整位置；滚轮缩放，拖动画布空白处平移。布局保存到 <code>{{layoutFile}}</code>
+    （通过 <code>plans serve</code> 打开本页时写回仓库；file:// 打开时保存到浏览器本地）。</p>
+  {{/if}}
+  {{#unless hasTables}}
+  <section class="empty">
+    <h2>还没有可合并的 schema.sql</h2>
+    <p>先对任务运行 <code>/harness-cli sql</code>（或 <code>dsh-plugin-harness-cli sql &lt;任务&gt;</code>），
+      生成 <code>docs/specs/&lt;任务&gt;/schema.sql</code> 后再刷新本页。</p>
+    {{#if missing}}
+    <p class="hint">已有任务（暂无 schema）：{{#each missing}}<span>{{this}}</span> {{/each}}</p>
+    {{/if}}
+  </section>
+  {{/unless}}
+
+  {{#if hasRelations}}
+  <section class="card">
+    <h2>关系说明</h2>
+    <table class="meta-table">
+      <thead><tr><th>来源</th><th>目标</th><th>基数</th><th>说明</th><th>定义任务</th></tr></thead>
+      <tbody>
+        {{#each relationships}}
+        <tr>
+          <td><code>{{from}}.{{fromColumn}}</code></td>
+          <td><code>{{to}}.{{toColumn}}</code></td>
+          <td>{{cardinality}}</td>
+          <td>{{description}}</td>
+          <td>{{tasks}}</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  </section>
+  {{/if}}
+
+  {{#if hasSchemas}}
+  <section class="card">
+    <h2>schema.sql 源码</h2>
+    {{#each schemas}}
+    <details class="schema-block">
+      <summary>{{name}} · schema.sql</summary>
+      <pre><code>{{schema}}</code></pre>
+    </details>
+    {{/each}}
+  </section>
+  {{/if}}
+
+  <footer>
+    唯一真源：各任务的 <code>docs/specs/&lt;任务&gt;/schema.sql</code>。本页只保存布局，不改 schema；
+    本文件由 <code>dsh-plugin-harness-cli sql</code> 生成，不要手改。
+  </footer>
+</main>
+
+{{#if hasTables}}
+<script>
+window.__HARNESS_DB__ = {
+  project: "{{project}}",
+  relations: {{relationsJson}},
+  layout: {{layoutJson}},
+  layoutFile: "{{layoutFile}}"
+};
+</script>
+<script>
+(function () {
+  var DATA = window.__HARNESS_DB__ || {relations: [], layout: {positions: {}}, layoutFile: 'prototype/db-layout.json'};
+  var viewport = document.getElementById('viewport');
+  var canvas = document.getElementById('canvas');
+  var svg = document.getElementById('edges');
+  var statusEl = document.getElementById('status');
+  var zoomLabel = document.getElementById('zoomLabel');
+  if (!viewport || !canvas || !svg) return;
+
+  var NS = 'http://www.w3.org/2000/svg';
+  var cards = Array.prototype.slice.call(canvas.querySelectorAll('[data-table]'));
+  var positions = {};
+  var zoom = 1;
+  var panX = 0;
+  var panY = 0;
+  var drag = null;
+  var pan = null;
+  var frame = 0;
+
+  function cardName(card) {
+    return card.getAttribute('data-table');
+  }
+  function byAttr(root, attr, value) {
+    var nodes = root.querySelectorAll('[' + attr + ']');
+    for (var i = 0; i < nodes.length; i += 1) {
+      if (nodes[i].getAttribute(attr) === value) return nodes[i];
+    }
+    return null;
+  }
+  function storageKey() {
+    return 'harness-cli-db-layout/' + (DATA.project || 'project');
+  }
+  function activeTasks() {
+    var boxes = document.querySelectorAll('[data-task-filter]');
+    var list = [];
+    for (var i = 0; i < boxes.length; i += 1) {
+      if (boxes[i].checked) list.push(boxes[i].getAttribute('data-task-filter'));
+    }
+    return list;
+  }
+  function isVisible(card) {
+    var active = activeTasks();
+    if (active.length === 0) return false;
+    var own = card.getAttribute('data-tasks').split(',');
+    for (var i = 0; i < own.length; i += 1) {
+      if (active.indexOf(own[i]) >= 0) return true;
+    }
+    return false;
+  }
+  function updateVisibility() {
+    cards.forEach(function (card) {
+      card.style.display = isVisible(card) ? '' : 'none';
+    });
+    schedule();
+  }
+
+  function autoLayout() {
+    var visible = cards.filter(isVisible);
+    var columns = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(visible.length || 1))));
+    var gapX = 48;
+    var gapY = 32;
+    var left = 24;
+    var topY = 24;
+    var heights = [];
+    for (var c = 0; c < columns; c += 1) heights.push(topY);
+    var taskOrder = {};
+    var boxes = document.querySelectorAll('[data-task-filter]');
+    for (var b = 0; b < boxes.length; b += 1) {
+      taskOrder[boxes[b].getAttribute('data-task-filter')] = b;
+    }
+    visible.sort(function (a, b) {
+      var at = (a.getAttribute('data-tasks') || '').split(',')[0];
+      var bt = (b.getAttribute('data-tasks') || '').split(',')[0];
+      var ao = taskOrder[at] === undefined ? 99 : taskOrder[at];
+      var bo = taskOrder[bt] === undefined ? 99 : taskOrder[bt];
+      return ao - bo || cardName(a).localeCompare(cardName(b));
+    });
+    visible.forEach(function (card) {
+      var col = 0;
+      for (var i = 1; i < columns; i += 1) if (heights[i] < heights[col]) col = i;
+      positions[cardName(card)] = {x: left + col * (280 + gapX), y: heights[col]};
+      heights[col] += card.offsetHeight + gapY;
+    });
+  }
+
+  function applyPositions() {
+    var maxX = 0;
+    var maxY = 0;
+    cards.forEach(function (card) {
+      var p = positions[cardName(card)];
+      if (!p) return;
+      card.style.left = p.x + 'px';
+      card.style.top = p.y + 'px';
+      card.style.visibility = 'visible';
+      if (isVisible(card)) {
+        maxX = Math.max(maxX, p.x + card.offsetWidth);
+        maxY = Math.max(maxY, p.y + card.offsetHeight);
+      }
+    });
+    canvas.style.width = Math.max(320, maxX + 24) + 'px';
+    canvas.style.height = Math.max(240, maxY + 24) + 'px';
+  }
+
+  function setTransform() {
+    canvas.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+    zoomLabel.textContent = Math.round(zoom * 100) + '%';
+  }
+
+  function clearEdges() {
+    var nodes = svg.querySelectorAll('path.er-line, text.er-label');
+    for (var i = 0; i < nodes.length; i += 1) nodes[i].parentNode.removeChild(nodes[i]);
+  }
+
+  function draw() {
+    if (!svg) return;
+    svg.setAttribute('viewBox', '0 0 ' + canvas.offsetWidth + ' ' + canvas.offsetHeight);
+    clearEdges();
+    var relations = DATA.relations || [];
+    for (var i = 0; i < relations.length; i += 1) {
+      var rel = relations[i];
+      var fromCard = byAttr(canvas, 'data-table', rel.from);
+      var toCard = byAttr(canvas, 'data-table', rel.to);
+      if (!fromCard || !toCard) continue;
+      if (fromCard.style.display === 'none' || toCard.style.display === 'none') continue;
+      var fromRow = byAttr(fromCard, 'data-col', rel.fromColumn);
+      var toRow = byAttr(toCard, 'data-col', rel.toColumn);
+      if (!fromRow || !toRow) continue;
+
+      var fb = {
+        left: fromCard.offsetLeft,
+        top: fromCard.offsetTop,
+        width: fromCard.offsetWidth,
+        height: fromCard.offsetHeight,
+        right: fromCard.offsetLeft + fromCard.offsetWidth,
+        bottom: fromCard.offsetTop + fromCard.offsetHeight
+      };
+      var tb = {
+        left: toCard.offsetLeft,
+        top: toCard.offsetTop,
+        width: toCard.offsetWidth,
+        height: toCard.offsetHeight,
+        right: toCard.offsetLeft + toCard.offsetWidth,
+        bottom: toCard.offsetTop + toCard.offsetHeight
+      };
+      var fc = {x: fb.left + fb.width / 2, y: fb.top + fb.height / 2};
+      var tc = {x: tb.left + tb.width / 2, y: tb.top + tb.height / 2};
+      var ddx = Math.abs(fc.x - tc.x);
+      var ddy = Math.abs(fc.y - tc.y);
+      var sx;
+      var sy;
+      var tx;
+      var ty;
+      var c1x;
+      var c1y;
+      var c2x;
+      var c2y;
+      var labelX;
+      var labelY;
+      var labelAnchor;
+
+      if (ddx < Math.min(fb.width, tb.width) * 0.45) {
+        // 同一列：从列的外侧绕过去，避免连线穿过中间实体。
+        var routeRight = fc.x <= canvas.offsetWidth / 2;
+        var side = routeRight ? 1 : -1;
+        sx = routeRight ? fb.right : fb.left;
+        tx = routeRight ? tb.right : tb.left;
+        sy = fromRow.offsetTop + fromRow.offsetHeight / 2;
+        ty = toRow.offsetTop + toRow.offsetHeight / 2;
+        var midY = (sy + ty) / 2;
+        c1x = sx + side * 32;
+        c1y = midY;
+        c2x = tx + side * 32;
+        c2y = midY;
+        labelX = (sx + tx) / 2 + side * 8;
+        labelY = midY;
+        labelAnchor = routeRight ? 'start' : 'end';
+      } else if (ddx >= ddy) {
+        var rightward = fc.x <= tc.x;
+        sx = rightward ? fb.right : fb.left;
+        tx = rightward ? tb.left : tb.right;
+        sy = fromRow.offsetTop + fromRow.offsetHeight / 2;
+        ty = toRow.offsetTop + toRow.offsetHeight / 2;
+        var hx = Math.max(24, Math.abs(tx - sx) / 2);
+        c1x = sx + (rightward ? hx : -hx);
+        c1y = sy;
+        c2x = tx - (rightward ? hx : -hx);
+        c2y = ty;
+        labelX = (sx + tx) / 2;
+        labelY = (sy + ty) / 2 - 4;
+        labelAnchor = 'middle';
+      } else {
+        var downward = fc.y <= tc.y;
+        sx = fc.x;
+        tx = tc.x;
+        sy = downward ? fb.bottom : fb.top;
+        ty = downward ? tb.top : tb.bottom;
+        var vy = Math.max(20, Math.abs(ty - sy) / 2);
+        c1x = sx;
+        c1y = sy + (downward ? vy : -vy);
+        c2x = tx;
+        c2y = ty - (downward ? vy : -vy);
+        labelX = (sx + tx) / 2 + 6;
+        labelY = (sy + ty) / 2;
+        labelAnchor = 'start';
+      }
+
+      var path = document.createElementNS(NS, 'path');
+      path.setAttribute('class', 'er-line' + (rel.oneToOne ? ' is-one' : ''));
+      path.setAttribute(
+        'd',
+        'M ' + sx + ' ' + sy +
+          ' C ' + c1x + ' ' + c1y + ', ' + c2x + ' ' + c2y +
+          ', ' + tx + ' ' + ty
+      );
+      path.setAttribute('marker-end', 'url(#er-arrow)');
+      svg.appendChild(path);
+
+      var label = document.createElementNS(NS, 'text');
+      label.setAttribute('class', 'er-label');
+      label.setAttribute('x', String(labelX));
+      label.setAttribute('y', String(labelY));
+      label.style.textAnchor = labelAnchor;
+      label.textContent = rel.fromColumn;
+      svg.appendChild(label);
+    }
+  }
+
+  function schedule() {
+    if (frame) return;
+    frame = requestAnimationFrame(function () {
+      frame = 0;
+      applyPositions();
+      draw();
+    });
+  }
+
+  function fit() {
+    var vw = viewport.clientWidth;
+    var vh = viewport.clientHeight;
+    var cw = canvas.offsetWidth;
+    var ch = canvas.offsetHeight;
+    zoom = Math.max(0.35, Math.min(1.15, Math.min((vw - 48) / cw, (vh - 48) / ch)));
+    panX = (vw - cw * zoom) / 2;
+    panY = (vh - ch * zoom) / 2;
+    setTransform();
+  }
+
+  function zoomAt(next, clientX, clientY) {
+    next = Math.max(0.35, Math.min(2.5, next));
+    var rect = viewport.getBoundingClientRect();
+    var mx = clientX - rect.left;
+    var my = clientY - rect.top;
+    var cx = (mx - panX) / zoom;
+    var cy = (my - panY) / zoom;
+    zoom = next;
+    panX = mx - cx * zoom;
+    panY = my - cy * zoom;
+    setTransform();
+  }
+
+  function sanitize(raw) {
+    var out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    var keys = Object.keys(raw);
+    for (var i = 0; i < keys.length; i += 1) {
+      var name = keys[i];
+      var pos = raw[name];
+      if (!pos || typeof pos !== 'object') continue;
+      var x = Number(pos.x);
+      var y = Number(pos.y);
+      if (!isFinite(x) || !isFinite(y)) continue;
+      if (Math.abs(x) > 1000000 || Math.abs(y) > 1000000) continue;
+      out[name] = {x: Math.round(x), y: Math.round(y)};
+      if (Object.keys(out).length >= 500) break;
+    }
+    return out;
+  }
+
+  function layoutPayload() {
+    return {version: 1, positions: positions, updatedAt: new Date().toISOString()};
+  }
+
+  function markDirty(message) {
+    if (message) statusEl.textContent = message;
+  }
+
+  function saveLayout() {
+    var payload = layoutPayload();
+    try {
+      localStorage.setItem(storageKey(), JSON.stringify(payload));
+    } catch (err) {
+      // 浏览器禁用 localStorage：至少还能写回仓库或复制 JSON。
+    }
+    if (location.protocol === 'file:') {
+      statusEl.textContent = '已保存到浏览器本地（file:// 不能写仓库）；要写回仓库请用 plans serve 打开本页。';
+      return;
+    }
+    fetch('/api/db-layout', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    })
+      .then(function (response) {
+        return response.json().then(function (body) { return {ok: response.ok, body: body}; });
+      })
+      .then(function (result) {
+        if (!result.ok) throw new Error((result.body && result.body.error) || '保存失败');
+        statusEl.textContent = '已保存到 ' + ((result.body && result.body.file) || DATA.layoutFile || 'prototype/db-layout.json');
+      })
+      .catch(function (err) {
+        statusEl.textContent = '写仓库失败：' + (err && err.message ? err.message : err) + '；已保存到浏览器本地。';
+      });
+  }
+
+  function copyLayout() {
+    var text = JSON.stringify(layoutPayload(), null, 2);
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).then(
+        function () { statusEl.textContent = '布局 JSON 已复制到剪贴板。'; },
+        function () { window.prompt('复制布局 JSON：', text); }
+      );
+      return;
+    }
+    window.prompt('复制布局 JSON：', text);
+  }
+
+  function resetLayout() {
+    if (!window.confirm('恢复自动布局？当前手动位置会被清除（浏览器本地与当前页面）。')) return;
+    positions = {};
+    try { localStorage.removeItem(storageKey()); } catch (err) {}
+    autoLayout();
+    applyPositions();
+    fit();
+    draw();
+    statusEl.textContent = '已恢复自动布局；点「保存布局」可清掉仓库里的手动位置。';
+  }
+
+  function initialLayout() {
+    var embedded = DATA.layout && DATA.layout.positions ? DATA.layout : {positions: {}};
+    var local = null;
+    try { local = JSON.parse(localStorage.getItem(storageKey()) || 'null'); } catch (err) { local = null; }
+    var embeddedTime = embedded.updatedAt || '';
+    var localTime = local && local.updatedAt ? local.updatedAt : '';
+    var useLocal = Boolean(local && local.positions && (localTime >= embeddedTime || !embeddedTime));
+    var raw = useLocal ? local.positions : embedded.positions;
+    positions = sanitize(raw);
+    if (Object.keys(positions).length === 0) autoLayout();
+    else {
+      var auto = {};
+      var savePositions = positions;
+      positions = {};
+      autoLayout();
+      auto = positions;
+      positions = savePositions;
+      cards.forEach(function (card) {
+        var name = cardName(card);
+        if (!positions[name] && auto[name]) positions[name] = auto[name];
+      });
+    }
+    Object.keys(positions).forEach(function (name) {
+      var hit = cards.some(function (card) { return cardName(card) === name; });
+      if (!hit) delete positions[name];
+    });
+  }
+
+  cards.forEach(function (card) {
+    card.addEventListener('pointerdown', function (event) {
+      if (event.button !== 0) return;
+      if (event.target.closest('button, a, input')) return;
+      var pos = positions[cardName(card)];
+      if (!pos) return;
+      event.preventDefault();
+      drag = {
+        card: card,
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: pos.x,
+        originY: pos.y
+      };
+      card.setPointerCapture(event.pointerId);
+      card.classList.add('is-dragging');
+      statusEl.textContent = '已移动：记得点「保存布局」。';
+    });
+    card.addEventListener('pointermove', function (event) {
+      if (!drag || drag.card !== card) return;
+      var pos = positions[cardName(card)];
+      if (!pos) return;
+      pos.x = Math.round(drag.originX + (event.clientX - drag.startX) / zoom);
+      pos.y = Math.round(drag.originY + (event.clientY - drag.startY) / zoom);
+      schedule();
+    });
+    function endDrag(event) {
+      if (!drag || drag.card !== card) return;
+      try { card.releasePointerCapture(event.pointerId); } catch (err) {}
+      card.classList.remove('is-dragging');
+      drag = null;
+      schedule();
+    }
+    card.addEventListener('pointerup', endDrag);
+    card.addEventListener('pointercancel', endDrag);
+  });
+
+  viewport.addEventListener('pointerdown', function (event) {
+    if (event.button !== 0) return;
+    if (event.target.closest('.entity')) return;
+    pan = {startX: event.clientX, startY: event.clientY, originX: panX, originY: panY};
+    viewport.classList.add('is-panning');
+    viewport.setPointerCapture(event.pointerId);
+  });
+  viewport.addEventListener('pointermove', function (event) {
+    if (!pan) return;
+    panX = pan.originX + (event.clientX - pan.startX);
+    panY = pan.originY + (event.clientY - pan.startY);
+    setTransform();
+  });
+  function endPan(event) {
+    if (!pan) return;
+    try { viewport.releasePointerCapture(event.pointerId); } catch (err) {}
+    viewport.classList.remove('is-panning');
+    pan = null;
+  }
+  viewport.addEventListener('pointerup', endPan);
+  viewport.addEventListener('pointercancel', endPan);
+
+  viewport.addEventListener('wheel', function (event) {
+    event.preventDefault();
+    zoomAt(zoom * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
+  }, {passive: false});
+
+  document.getElementById('autoLayout').addEventListener('click', function () {
+    autoLayout();
+    applyPositions();
+    fit();
+    draw();
+    statusEl.textContent = '已按当前可见任务自动布局；点「保存布局」写回。';
+  });
+  document.getElementById('fit').addEventListener('click', fit);
+  document.getElementById('zoomIn').addEventListener('click', function () {
+    var rect = viewport.getBoundingClientRect();
+    zoomAt(zoom * 1.15, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+  document.getElementById('zoomOut').addEventListener('click', function () {
+    var rect = viewport.getBoundingClientRect();
+    zoomAt(zoom / 1.15, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+  document.getElementById('saveLayout').addEventListener('click', saveLayout);
+  document.getElementById('copyLayout').addEventListener('click', copyLayout);
+  document.getElementById('resetLayout').addEventListener('click', resetLayout);
+  document.getElementById('selectAll').addEventListener('click', function () {
+    document.querySelectorAll('[data-task-filter]').forEach(function (box) { box.checked = true; });
+    updateVisibility();
+  });
+  document.getElementById('selectNone').addEventListener('click', function () {
+    document.querySelectorAll('[data-task-filter]').forEach(function (box) { box.checked = false; });
+    updateVisibility();
+  });
+  document.querySelectorAll('[data-task-filter]').forEach(function (box) {
+    box.addEventListener('change', updateVisibility);
+  });
+
+  var importFile = document.getElementById('layoutFile');
+  document.getElementById('importLayout').addEventListener('click', function () { importFile.click(); });
+  importFile.addEventListener('change', function () {
+    var file = importFile.files && importFile.files[0];
+    if (!file) return;
+    file.text().then(function (text) {
+      var parsed = JSON.parse(text);
+      var raw = parsed && parsed.positions ? parsed.positions : parsed;
+      var imported = sanitize(raw);
+      if (Object.keys(imported).length === 0) throw new Error('没有合法的 positions');
+      positions = imported;
+      applyPositions();
+      fit();
+      draw();
+      statusEl.textContent = '已导入布局（未保存）；点「保存布局」确认。';
+    }).catch(function (err) {
+      statusEl.textContent = '导入失败：' + (err && err.message ? err.message : err);
+    });
+  });
+
+  window.addEventListener('resize', function () { schedule(); });
+
+  // 暴露给调试 / 自动化：不依赖内部闭包也能验证布局。
+  window.__harnessDb = {
+    positions: function () { return JSON.parse(JSON.stringify(positions)); },
+    autoLayout: autoLayout,
+    apply: function () { applyPositions(); draw(); },
+    fit: fit,
+    save: saveLayout,
+    setZoom: function (next) { zoomAt(next, 0, 0); }
+  };
+
+  function boot() {
+    initialLayout();
+    applyPositions();
+    updateVisibility();
+    fit();
+    draw();
+    var count = Object.keys(positions).length;
+    statusEl.textContent = count > 0 ? '已载入 ' + count + ' 个手动位置；拖动实体可调整。' : '自动布局；拖动实体可手动调整。';
+  }
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(boot);
+  else requestAnimationFrame(boot);
+})();
+</script>
+{{/if}}
+<noscript><style>.hcli-skeleton{display:none!important}</style></noscript>
+<style>
+  .hcli-skeleton{position:fixed;inset:0;z-index:9998;background:#f5f5f5;padding:24px;box-sizing:border-box;
+    transition:opacity .18s ease;overflow:hidden}
+  .hcli-skeleton.is-hidden{opacity:0;visibility:hidden;pointer-events:none}
+  .hcli-sk{border-radius:8px;background:linear-gradient(90deg,#ececec 25%,#f7f7f7 37%,#ececec 63%);
+    background-size:400% 100%;animation:hcli-sk 1.15s ease infinite;margin-bottom:12px}
+  @keyframes hcli-sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .hcli-sk-row{display:flex;gap:12px}
+  .hcli-sk-row .hcli-sk{flex:1;margin-bottom:0}
+</style>
+<div class="hcli-skeleton" id="hcli-skeleton" aria-hidden="true">
+  <div class="hcli-sk" style="width:220px;height:26px"></div>
+  <div class="hcli-sk" style="width:100%;height:52px"></div>
+  <div class="hcli-sk-row">
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+  </div>
+  <div class="hcli-sk" style="width:100%;height:180px"></div>
+  <div class="hcli-sk" style="width:65%;height:18px"></div>
+  <div class="hcli-sk" style="width:85%;height:18px"></div>
+</div>
+<script>
+(function(){
+  var el = document.getElementById('hcli-skeleton');
+  if (!el) return;
+  function hide() {
+    el.classList.add('is-hidden');
+    setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+  }
+  if (document.readyState === 'complete') setTimeout(hide, 300);
+  else window.addEventListener('load', function(){ setTimeout(hide, 300); });
+})();
+</script>
+</body>
+</html>

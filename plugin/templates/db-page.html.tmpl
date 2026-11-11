@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN" data-design-system="antd" data-db="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{task}} · 数模设计图</title>
+<!--
+  离线数模图：不引入 React / antd / Mermaid，只从嵌入的模型数据画实体卡与外键连线。
+  唯一真源是 docs/specs/{{task}}/schema.sql；本文件由 dsh-plugin-harness-cli sql 生成，不要手改。
+-->
+<style>
+  :root {
+    --ant-color-primary:#1677ff; --ant-color-success:#52c41a; --ant-color-warning:#faad14;
+    --ant-color-error:#ff4d4f; --ant-color-text:rgba(0,0,0,.88); --ant-color-text-secondary:rgba(0,0,0,.65);
+    --ant-color-text-tertiary:rgba(0,0,0,.45); --ant-color-border:#d9d9d9; --ant-color-border-secondary:#f0f0f0;
+    --ant-color-bg-container:#fff; --ant-color-bg-layout:#f5f5f5; --ant-border-radius:6px; --ant-border-radius-lg:8px;
+    --ant-box-shadow:0 1px 2px rgba(0,0,0,.03),0 1px 6px -1px rgba(0,0,0,.02);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--ant-color-bg-layout); color:var(--ant-color-text);
+    font:14px/1.5714 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+         background:rgba(0,0,0,.06); border-radius:4px; padding:0 4px; }
+  main { max-width:1280px; margin:0 auto; padding:24px 16px 64px; }
+  header.page {
+    display:flex; justify-content:space-between; align-items:flex-start; gap:24px; flex-wrap:wrap;
+    background:var(--ant-color-bg-container); border-radius:var(--ant-border-radius-lg);
+    box-shadow:var(--ant-box-shadow); padding:16px 24px; margin-bottom:16px;
+  }
+  h1 { font-size:20px; margin:0; }
+  .meta { color:var(--ant-color-text-secondary); font-size:13px; margin:4px 0 0; }
+  .stats { display:flex; gap:20px; }
+  .stat { text-align:right; min-width:64px; }
+  .stat b { display:block; font-size:22px; line-height:1.2; font-variant-numeric:tabular-nums; }
+  .stat span { color:var(--ant-color-text-secondary); font-size:12px; }
+  .stat.error b { color:var(--ant-color-error); }
+  .stat.warn b { color:var(--ant-color-warning); }
+  .card { background:var(--ant-color-bg-container); border-radius:var(--ant-border-radius-lg);
+          box-shadow:var(--ant-box-shadow); padding:16px 24px; margin-bottom:16px; }
+  .card h2 { font-size:16px; margin:0 0 8px; }
+  .issues ul { list-style:none; margin:8px 0 0; padding:0; display:grid; gap:4px; }
+  .issues li { font-size:13px; padding:4px 8px; border-radius:4px; background:#fafafa; }
+  .issues li.error { background:#fff1f0; }
+  .issues li.warning { background:#fffbe6; }
+  .issues li b { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin-right:8px; }
+  .issues .hint { display:block; color:var(--ant-color-text-secondary); font-size:12px; margin-left:56px; }
+  .diagram { position:relative; background:var(--ant-color-bg-container); border-radius:var(--ant-border-radius-lg);
+             box-shadow:var(--ant-box-shadow); padding:24px; overflow:visible; }
+  .er-grid { position:relative; z-index:1; display:grid; gap:64px 56px;
+             grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
+  .entity { background:#fff; border:1px solid var(--ant-color-border); border-radius:var(--ant-border-radius-lg);
+            box-shadow:var(--ant-box-shadow); overflow:hidden; }
+  .entity > header { display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+                     padding:10px 14px; background:#fafafa; border-bottom:1px solid var(--ant-color-border-secondary); }
+  .entity > header b { font-size:14px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .entity > header span { color:var(--ant-color-text-tertiary); font-size:12px; }
+  .entity ul { list-style:none; margin:0; padding:0; }
+  .entity li { display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px 8px; padding:6px 14px;
+               border-bottom:1px dashed var(--ant-color-border-secondary); font-size:13px; }
+  .entity li:last-child { border-bottom:0; }
+  .entity li.is-pk { background:#f0f7ff; }
+  .entity-desc { margin:0; padding:8px 14px; color:var(--ant-color-text-secondary); font-size:12px;
+                 line-height:1.45; border-bottom:1px dashed var(--ant-color-border-secondary); }
+  .col-line { display:flex; align-items:center; gap:8px; width:100%; }
+  .col-desc { width:100%; color:var(--ant-color-text-secondary); font-size:11.5px; line-height:1.45; }
+  .col-desc.is-missing { color:var(--ant-color-text-tertiary); font-style:italic; }
+  .meta-table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  .meta-table th, .meta-table td { text-align:left; padding:8px 10px; vertical-align:top;
+                                   border-bottom:1px solid var(--ant-color-border-secondary); }
+  .meta-table th { background:#fafafa; font-weight:600; white-space:nowrap; }
+  .meta-table code { white-space:nowrap; }
+  .col-name { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:600; white-space:nowrap; }
+  .col-type { color:var(--ant-color-text-tertiary); font-size:12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badges { margin-left:auto; display:flex; gap:4px; flex:0 0 auto; }
+  .badge { font-style:normal; font-size:10px; line-height:16px; padding:0 4px; border-radius:3px;
+           border:1px solid transparent; white-space:nowrap; }
+  .badge.pk { color:#0958d9; background:#e6f4ff; border-color:#91caff; }
+  .badge.fk { color:#d46b08; background:#fff7e6; border-color:#ffd591; }
+  .badge.uk { color:#531dab; background:#f9f0ff; border-color:#d3adf7; }
+  .badge.nn { color:#389e0d; background:#f6ffed; border-color:#b7eb8f; }
+  #er-lines { position:absolute; inset:0; width:100%; height:100%; z-index:0; overflow:visible; pointer-events:none; }
+  .er-line { fill:none; stroke:#8c8c8c; stroke-width:1.5; }
+  .er-line.is-one { stroke-dasharray:4 3; }
+  .er-label { font-size:11px; fill:#8c8c8c; text-anchor:middle; paint-order:stroke;
+              stroke:#fff; stroke-width:3; stroke-linejoin:round; }
+  .legend { color:var(--ant-color-text-tertiary); font-size:12px; margin:8px 0 0; }
+  .empty { text-align:center; padding:48px 16px; }
+  .empty h2 { font-size:18px; margin:0 0 8px; }
+  footer { color:var(--ant-color-text-tertiary); font-size:12px; margin-top:16px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page">
+    <div>
+      <h1>{{task}} · 数模设计图</h1>
+      <p class="meta">{{project}} · 生成时间 {{generatedAt}} · 唯一真源 <code>{{schemaPath}}</code></p>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>{{tableCount}}</b><span>表</span></div>
+      <div class="stat"><b>{{columnCount}}</b><span>字段</span></div>
+      <div class="stat"><b>{{relationCount}}</b><span>关系</span></div>
+      <div class="stat error"><b>{{errorCount}}</b><span>错误</span></div>
+      <div class="stat warn"><b>{{warningCount}}</b><span>警告</span></div>
+    </div>
+  </header>
+
+  {{#if issues}}
+  <section class="card issues">
+    <h2>规范检查</h2>
+    <p class="meta">错误 {{errorCount}} · 警告 {{warningCount}}；错误修完后重新运行 <code>/harness-cli sql {{task}}</code>。</p>
+    <ul>
+      {{#each issues}}
+      <li class="{{level}}"><b>{{id}}</b>{{message}}{{#if hint}}<span class="hint">{{hint}}</span>{{/if}}</li>
+      {{/each}}
+    </ul>
+  </section>
+  {{/if}}
+
+  {{#if hasTables}}
+  <section class="diagram" id="er">
+    <svg id="er-lines" aria-hidden="true">
+      <defs>
+        <marker id="er-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#8c8c8c"></path>
+        </marker>
+      </defs>
+    </svg>
+    <div class="er-grid">
+      {{#each tables}}
+      <article class="entity" data-table="{{name}}">
+        <header><b>{{name}}</b><span>{{columnCount}} 列</span></header>
+        {{#if description}}<p class="entity-desc">{{description}}</p>{{/if}}
+        <ul>
+          {{#each columns}}
+          <li data-col="{{name}}"{{#if pk}} class="is-pk"{{/if}}>
+            <div class="col-line">
+              <span class="col-name">{{name}}</span>
+              <span class="col-type">{{type}}</span>
+              <span class="badges">
+                {{#if pk}}<i class="badge pk">PK</i>{{/if}}
+                {{#if fk}}<i class="badge fk">FK</i>{{/if}}
+                {{#if unique}}<i class="badge uk">UK</i>{{/if}}
+                {{#if notNull}}<i class="badge nn">NN</i>{{/if}}
+              </span>
+            </div>
+            <div class="col-desc{{#unless description}} is-missing{{/unless}}">{{#if description}}{{description}}{{/if}}{{#unless description}}缺说明{{/unless}}</div>
+          </li>
+          {{/each}}
+        </ul>
+      </article>
+      {{/each}}
+    </div>
+  </section>
+  <p class="legend">PK 主键 · FK 外键 · UK 唯一 · NN 非空 · 连线表示外键关系（实线 1:N，虚线 1:1）。</p>
+
+  {{#if hasRelations}}
+  <section class="card">
+    <h2>关系说明</h2>
+    <table class="meta-table">
+      <thead><tr><th>来源</th><th>目标</th><th>基数</th><th>范围</th><th>说明</th></tr></thead>
+      <tbody>
+        {{#each relationships}}
+        <tr>
+          <td><code>{{from}}.{{fromColumn}}</code></td>
+          <td><code>{{to}}.{{toColumn}}</code></td>
+          <td>{{cardinality}}</td>
+          <td>{{#if external}}外部表{{else}}本任务{{/if}}</td>
+          <td>{{description}}</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  </section>
+  {{/if}}
+
+  {{#if hasFields}}
+  <section class="card">
+    <h2>字段说明</h2>
+    <table class="meta-table">
+      <thead><tr><th>所属表</th><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead>
+      <tbody>
+        {{#each fieldRows}}
+        <tr>
+          <td><code>{{tables}}</code></td>
+          <td><code>{{column}}</code></td>
+          <td>{{type}}</td>
+          <td>{{keys}}</td>
+          <td>{{description}}</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+  </section>
+  {{/if}}
+  {{/if}}
+  {{#unless hasTables}}
+  <section class="card empty">
+    <h2>还没有表</h2>
+    <p>把 <code>{{schemaPath}}</code> 补成真实的 <code>CREATE TABLE</code> 后，重新运行 <code>/harness-cli sql {{task}}</code>。</p>
+  </section>
+  {{/unless}}
+
+  <footer>
+    本页由 <code>dsh-plugin-harness-cli sql</code> 从 <code>{{schemaPath}}</code> 生成，不要手改。
+    Mermaid 源码：<code>{{mermaidPath}}</code>。
+  </footer>
+</main>
+<script>
+(function () {
+  var MODEL = {{modelJson}};
+  var wrap = document.getElementById('er');
+  var svg = document.getElementById('er-lines');
+  if (!wrap || !svg || !MODEL || !Array.isArray(MODEL.relations)) return;
+
+  var NS = 'http://www.w3.org/2000/svg';
+  function byAttr(root, attr, value) {
+    var nodes = root.querySelectorAll('[' + attr + ']');
+    for (var i = 0; i < nodes.length; i += 1) {
+      if (nodes[i].getAttribute(attr) === value) return nodes[i];
+    }
+    return null;
+  }
+  function clear() {
+    var nodes = svg.querySelectorAll('path.er-line, text.er-label');
+    for (var i = 0; i < nodes.length; i += 1) nodes[i].parentNode.removeChild(nodes[i]);
+  }
+  function draw() {
+    var box = wrap.getBoundingClientRect();
+    svg.setAttribute('viewBox', '0 0 ' + box.width + ' ' + box.height);
+    clear();
+    for (var i = 0; i < MODEL.relations.length; i += 1) {
+      var rel = MODEL.relations[i];
+      var fromCard = byAttr(wrap, 'data-table', rel.from);
+      var toCard = byAttr(wrap, 'data-table', rel.to);
+      if (!fromCard || !toCard) continue;
+      var fromRow = byAttr(fromCard, 'data-col', rel.fromColumn);
+      var toRow = byAttr(toCard, 'data-col', rel.toColumn);
+      if (!fromRow || !toRow) continue;
+
+      var fb = fromCard.getBoundingClientRect();
+      var tb = toCard.getBoundingClientRect();
+      var fr = fromRow.getBoundingClientRect();
+      var tr = toRow.getBoundingClientRect();
+      var fc = {x: fb.left + fb.width / 2, y: fb.top + fb.height / 2};
+      var tc = {x: tb.left + tb.width / 2, y: tb.top + tb.height / 2};
+      var ddx = Math.abs(fc.x - tc.x);
+      var ddy = Math.abs(fc.y - tc.y);
+      var sx;
+      var sy;
+      var tx;
+      var ty;
+      var c1x;
+      var c1y;
+      var c2x;
+      var c2y;
+      var labelX;
+      var labelY;
+      var labelAnchor;
+
+      if (ddx < Math.min(fb.width, tb.width) * 0.45) {
+        // 同一列：从列的外侧绕过去，避免连线穿过中间的任务卡片。
+        var routeRight = fc.x <= box.left + box.width / 2;
+        var side = routeRight ? 1 : -1;
+        sx = (routeRight ? fb.right : fb.left) - box.left;
+        tx = (routeRight ? tb.right : tb.left) - box.left;
+        sy = fr.top + fr.height / 2 - box.top;
+        ty = tr.top + tr.height / 2 - box.top;
+        var midY = (sy + ty) / 2;
+        c1x = sx + side * 32;
+        c1y = midY;
+        c2x = tx + side * 32;
+        c2y = midY;
+        labelX = (sx + tx) / 2 + side * 8;
+        labelY = midY;
+        labelAnchor = routeRight ? 'start' : 'end';
+      } else if (ddx >= ddy) {
+        // 左右为主：从两张卡的左右边缘连
+        var rightward = fc.x <= tc.x;
+        sx = (rightward ? fb.right : fb.left) - box.left;
+        tx = (rightward ? tb.left : tb.right) - box.left;
+        sy = fr.top + fr.height / 2 - box.top;
+        ty = tr.top + tr.height / 2 - box.top;
+        var hx = Math.max(24, Math.abs(tx - sx) / 2);
+        c1x = sx + (rightward ? hx : -hx);
+        c1y = sy;
+        c2x = tx - (rightward ? hx : -hx);
+        c2y = ty;
+        labelX = (sx + tx) / 2;
+        labelY = (sy + ty) / 2 - 4;
+        labelAnchor = 'middle';
+      } else {
+        // 上下为主：从两张卡的上下边缘连
+        var downward = fc.y <= tc.y;
+        sx = fc.x - box.left;
+        tx = tc.x - box.left;
+        sy = (downward ? fb.bottom : fb.top) - box.top;
+        ty = (downward ? tb.top : tb.bottom) - box.top;
+        var vy = Math.max(20, Math.abs(ty - sy) / 2);
+        c1x = sx;
+        c1y = sy + (downward ? vy : -vy);
+        c2x = tx;
+        c2y = ty - (downward ? vy : -vy);
+        labelX = (sx + tx) / 2 + 6;
+        labelY = (sy + ty) / 2;
+        labelAnchor = 'start';
+      }
+
+      var path = document.createElementNS(NS, 'path');
+      path.setAttribute('class', 'er-line' + (rel.oneToOne ? ' is-one' : ''));
+      path.setAttribute(
+        'd',
+        'M ' + sx + ' ' + sy +
+          ' C ' + c1x + ' ' + c1y + ', ' + c2x + ' ' + c2y +
+          ', ' + tx + ' ' + ty
+      );
+      path.setAttribute('marker-end', 'url(#er-arrow)');
+      svg.appendChild(path);
+
+      var label = document.createElementNS(NS, 'text');
+      label.setAttribute('class', 'er-label');
+      label.setAttribute('x', String(labelX));
+      label.setAttribute('y', String(labelY));
+      label.style.textAnchor = labelAnchor;
+      label.textContent = rel.fromColumn;
+      svg.appendChild(label);
+    }
+  }
+  window.addEventListener('resize', draw);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(draw);
+  else setTimeout(draw, 16);
+})();
+</script>
+<noscript><style>.hcli-skeleton{display:none!important}</style></noscript>
+<style>
+  .hcli-skeleton{position:fixed;inset:0;z-index:9998;background:#f5f5f5;padding:24px;box-sizing:border-box;
+    transition:opacity .18s ease;overflow:hidden}
+  .hcli-skeleton.is-hidden{opacity:0;visibility:hidden;pointer-events:none}
+  .hcli-sk{border-radius:8px;background:linear-gradient(90deg,#ececec 25%,#f7f7f7 37%,#ececec 63%);
+    background-size:400% 100%;animation:hcli-sk 1.15s ease infinite;margin-bottom:12px}
+  @keyframes hcli-sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .hcli-sk-row{display:flex;gap:12px}
+  .hcli-sk-row .hcli-sk{flex:1;margin-bottom:0}
+</style>
+<div class="hcli-skeleton" id="hcli-skeleton" aria-hidden="true">
+  <div class="hcli-sk" style="width:220px;height:26px"></div>
+  <div class="hcli-sk" style="width:100%;height:52px"></div>
+  <div class="hcli-sk-row">
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+  </div>
+  <div class="hcli-sk" style="width:100%;height:180px"></div>
+  <div class="hcli-sk" style="width:65%;height:18px"></div>
+  <div class="hcli-sk" style="width:85%;height:18px"></div>
+</div>
+<script>
+(function(){
+  var el = document.getElementById('hcli-skeleton');
+  if (!el) return;
+  function hide() {
+    el.classList.add('is-hidden');
+    setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+  }
+  if (document.readyState === 'complete') setTimeout(hide, 300);
+  else window.addEventListener('load', function(){ setTimeout(hide, 300); });
+})();
+</script>
+</body>
+</html>

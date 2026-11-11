@@ -53,6 +53,13 @@ test('AGENTS.md 开工前先问操作模式，并写明自动 loop 的确认口�
   assert.match(agents, /推荐项/, '没有写清自动 loop 下确认走推荐项');
 });
 
+test('AGENTS.md 默认要求继续未完成任务', () => {
+  const ctx = buildContext(CONFIG, {});
+  const agents = render(loadTemplate('agents'), ctx);
+  assert.match(agents, /有未完成任务时先继续完成/, '没有要求优先继续未完成任务');
+  assert.match(agents, /不要从零重做或另起无关任务/, '没有禁止忽略已有进度另起任务');
+});
+
 test('任务页约定要求每一步变化都跑 progress，并先问操作模式', () => {
   const ctx = buildContext({...CONFIG, presets: {prototype: {...CONFIG.presets.prototype, enabled: true}}}, {});
   const agents = render(loadTemplate('agents'), ctx);

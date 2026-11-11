@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-plan-task="{{task}}" data-plan-status="待确认" data-confirmed-by="" data-confirmed-at="">
+<html lang="zh-CN" data-plan-task="{{task}}" data-plan-status="待确认" data-flow-status="待确认" data-confirmed-by="" data-confirmed-at="">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -26,6 +26,32 @@
   .hint { color:var(--faint); font-size:13px; margin-top:6px; }
   .gate { border-left:3px solid var(--warn); }
   .gate.is-ok { border-left-color: var(--ok); }
+  .flow-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:10px 0 12px; }
+  .flow-node { display:inline-block; padding:6px 10px; border:1px solid var(--line); border-radius:6px;
+               background:#fafafa; font-size:13px; }
+  .flow-arrow { color:var(--faint); }
+  .doc-modal { position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.5);
+               display:none; align-items:center; justify-content:center; padding:24px; }
+  .doc-modal.is-open { display:flex; }
+  .doc-dialog { width:min(900px,94vw); height:min(760px,90vh); background:#fff; color:var(--fg);
+                border-radius:10px; display:flex; flex-direction:column; overflow:hidden;
+                box-shadow:0 24px 80px rgba(0,0,0,.3); }
+  .doc-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line); }
+  .doc-head b { font-size:14px; }
+  .doc-head .spacer { flex:1; }
+  .doc-head a, .doc-head button { font:inherit; font-size:12px; color:var(--primary); background:none;
+                                  border:0; cursor:pointer; text-decoration:none; }
+  .doc-body { flex:1; overflow:auto; padding:20px 24px; font-size:14px; line-height:1.7; }
+  .doc-body h1, .doc-body h2, .doc-body h3 { margin:18px 0 8px; }
+  .doc-body h1 { font-size:20px; } .doc-body h2 { font-size:17px; } .doc-body h3 { font-size:15px; }
+  .doc-body pre { background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:12px;
+                  overflow:auto; font-size:12px; }
+  .doc-body code { background:rgba(0,0,0,.06); border-radius:4px; padding:1px 4px; font-size:12px; }
+  .doc-body pre code { background:none; padding:0; }
+  .doc-body table { width:100%; border-collapse:collapse; margin:10px 0; font-size:13px; }
+  .doc-body th, .doc-body td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+  .doc-body blockquote { margin:10px 0; padding:6px 12px; border-left:3px solid var(--line); color:var(--dim); }
+  .doc-loading { color:var(--faint); }
 </style>
 </head>
 <body>
@@ -44,6 +70,30 @@
       确认命令：<code>dsh-plugin-harness-cli plan {{task}} --confirm --by "确认人"</code>。
     </p>
   </header>
+
+  <section id="business-flow" data-section="business-flow">
+    <h2>0. 业务流程图（先确认）</h2>
+    <p class="hint">
+      先把业务流程图对齐并确认，再做页面 / 交互、数据模型与 UI 设计及文档；
+      流程图确认前不要把模板当成已定稿，提前生成的页面用骨架屏等待内容。
+    </p>
+    <div class="flow-row" data-flow-diagram>
+      <span class="flow-node">开始</span><span class="flow-arrow">→</span>
+      <span class="flow-node">待填：业务步骤</span><span class="flow-arrow">→</span>
+      <span class="flow-node">结束</span>
+    </div>
+    <ul data-flow-list>
+      <li>主流程：待填</li>
+      <li>异常路径：待填</li>
+      <li>状态流转：待填</li>
+    </ul>
+    <p class="meta">
+      流程图源文件：<a href="../../{{paths.specs}}/{{task}}/flow.md" data-flow-preview>docs/specs/{{task}}/flow.md</a>（Mermaid，点击预览）
+    </p>
+    <p class="hint">
+      业务流程图状态：<b data-flow-status-label>待确认</b>（随方案确认一起确认）
+    </p>
+  </section>
 
   <section id="goal" data-section="goal">
     <h2>1. 需求原话与目标</h2>
@@ -111,5 +161,159 @@
     </p>
   </section>
 </main>
+<div class="doc-modal" id="flow-doc-modal" aria-hidden="true">
+  <div class="doc-dialog" role="dialog" aria-modal="true" aria-label="业务流程图源文件">
+    <div class="doc-head">
+      <b>业务流程图源文件</b><span class="spacer"></span>
+      <a id="flow-doc-open" href="../../{{paths.specs}}/{{task}}/flow.md" target="_blank" rel="noopener">新窗口打开</a>
+      <button type="button" id="flow-doc-close">关闭</button>
+    </div>
+    <div class="doc-body" id="flow-doc-body"><p class="doc-loading">加载中…</p></div>
+  </div>
+</div>
+<script>
+(function () {
+  var trigger = document.querySelector('[data-flow-preview]');
+  var modal = document.getElementById('flow-doc-modal');
+  var body = document.getElementById('flow-doc-body');
+  var close = document.getElementById('flow-doc-close');
+  if (!trigger || !modal || !body) return;
+
+  function esc(value) {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function inline(value) {
+    return esc(value)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  }
+  function renderMarkdown(md) {
+    var lines = md.replace(/\r\n/g, '\n').split('\n');
+    var out = [], i = 0, inCode = false, code = [];
+    while (i < lines.length) {
+      var line = lines[i];
+      if (/^```/.test(line)) {
+        if (inCode) { out.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>'); code = []; inCode = false; }
+        else inCode = true;
+        i += 1;
+        continue;
+      }
+      if (inCode) { code.push(line); i += 1; continue; }
+      if (/^\s*$/.test(line)) { i += 1; continue; }
+      var heading = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (heading) {
+        var level = heading[1].length;
+        out.push('<h' + level + '>' + inline(heading[2]) + '</h' + level + '>');
+        i += 1;
+        continue;
+      }
+      if (/^[-*]\s+/.test(line)) {
+        var items = [];
+        while (i < lines.length && /^[-*]\s+/.test(lines[i])) {
+          items.push('<li>' + inline(lines[i].replace(/^[-*]\s+/, '')) + '</li>');
+          i += 1;
+        }
+        out.push('<ul>' + items.join('') + '</ul>');
+        continue;
+      }
+      if (/^\d+\.\s+/.test(line)) {
+        var numbered = [];
+        while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+          numbered.push('<li>' + inline(lines[i].replace(/^\d+\.\s+/, '')) + '</li>');
+          i += 1;
+        }
+        out.push('<ol>' + numbered.join('') + '</ol>');
+        continue;
+      }
+      if (/^\|/.test(line)) {
+        var rows = [];
+        while (i < lines.length && /^\|/.test(lines[i])) { rows.push(lines[i]); i += 1; }
+        var htmlRows = [];
+        var header = true;
+        for (var r = 0; r < rows.length; r += 1) {
+          if (/^\|[\s|:-]+\|?$/.test(rows[r])) continue;
+          var cells = rows[r].replace(/^\||\|$/g, '').split('|').map(function (cell) { return inline(cell.trim()); });
+          var tag = header ? 'th' : 'td';
+          htmlRows.push('<tr>' + cells.map(function (cell) { return '<' + tag + '>' + cell + '</' + tag + '>'; }).join('') + '</tr>');
+          header = false;
+        }
+        out.push('<table>' + htmlRows.join('') + '</table>');
+        continue;
+      }
+      if (/^>\s?/.test(line)) {
+        out.push('<blockquote>' + inline(line.replace(/^>\s?/, '')) + '</blockquote>');
+        i += 1;
+        continue;
+      }
+      out.push('<p>' + inline(line) + '</p>');
+      i += 1;
+    }
+    if (inCode && code.length) out.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>');
+    return out.join('\n');
+  }
+
+  function show(event) {
+    event.preventDefault();
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+    body.innerHTML = '<p class="doc-loading">加载中…</p>';
+    fetch(trigger.href, {cache: 'no-store'})
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      })
+      .then(function (text) { body.innerHTML = renderMarkdown(text); })
+      .catch(function () {
+        body.innerHTML = '<p>无法直接读取 Markdown（file:// 下浏览器会拦截）。</p>' +
+          '<p><a href="' + trigger.href + '" target="_blank" rel="noopener">在新窗口打开 flow.md</a></p>';
+      });
+  }
+  function hide() {
+    modal.classList.remove('is-open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+  trigger.addEventListener('click', show);
+  if (close) close.addEventListener('click', hide);
+  modal.addEventListener('click', function (e) { if (e.target === modal) hide(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+})();
+</script>
+
+<noscript><style>.hcli-skeleton{display:none!important}</style></noscript>
+<style>
+  .hcli-skeleton{position:fixed;inset:0;z-index:9998;background:#f5f5f5;padding:24px;box-sizing:border-box;
+    transition:opacity .18s ease;overflow:hidden}
+  .hcli-skeleton.is-hidden{opacity:0;visibility:hidden;pointer-events:none}
+  .hcli-sk{border-radius:8px;background:linear-gradient(90deg,#ececec 25%,#f7f7f7 37%,#ececec 63%);
+    background-size:400% 100%;animation:hcli-sk 1.15s ease infinite;margin-bottom:12px}
+  @keyframes hcli-sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .hcli-sk-row{display:flex;gap:12px}
+  .hcli-sk-row .hcli-sk{flex:1;margin-bottom:0}
+</style>
+<div class="hcli-skeleton" id="hcli-skeleton" aria-hidden="true">
+  <div class="hcli-sk" style="width:220px;height:26px"></div>
+  <div class="hcli-sk" style="width:100%;height:52px"></div>
+  <div class="hcli-sk-row">
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+  </div>
+  <div class="hcli-sk" style="width:100%;height:180px"></div>
+  <div class="hcli-sk" style="width:65%;height:18px"></div>
+  <div class="hcli-sk" style="width:85%;height:18px"></div>
+</div>
+<script>
+(function(){
+  var el = document.getElementById('hcli-skeleton');
+  if (!el) return;
+  function hide() {
+    el.classList.add('is-hidden');
+    setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+  }
+  if (document.readyState === 'complete') setTimeout(hide, 300);
+  else window.addEventListener('load', function(){ setTimeout(hide, 300); });
+})();
+</script>
 </body>
 </html>

@@ -44,7 +44,7 @@ dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"
 
 1. `dsh-plugin-harness-cli plan <任务>` 会把 `proposal.md` / `spec.md` / `design.md` / `tasks.md` 一次补全，并同步任务页的契约、用例与步骤（**人可以直接改**，再跑 plan 不会覆盖已填内容）；
 2. 跑 `dsh-plugin-harness-cli review <任务>`：Agent 复盘，核对文档与任务页是否一致，写
-   `docs/specs/<任务>/review.md`（含四份文档的指纹）；
+   `docs/specs/<任务>/review.md`（含五份文档的指纹，含业务流程图）；
 3. 跑 `dsh-plugin-harness-cli plan <任务> --confirm --by "确认人"`：人最终确认；
 4. 之后才能用 `progress` 推进度。
 

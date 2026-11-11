@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness CLI"
+  short_description: "Generate and validate project Harness configuration"
+  default_prompt: "Use $harness-cli to initialize or check this repository's Harness setup."

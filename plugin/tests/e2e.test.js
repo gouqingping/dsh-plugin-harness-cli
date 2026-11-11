@@ -806,15 +806,15 @@ test('plan 也会同步已有的 UI 与 wiki 事实', () => {
   assert.match(fs.readFileSync(proposal, 'utf8'), /<!-- wiki-context:begin -->/);
 });
 
-test('plan：创建任务时把 docs/specs 四份文档一次补全', () => {
+test('plan：创建任务时把 docs/specs 五份文档一次补全', () => {
   const dir = repo(['--preset', 'prototype']);
   assert.strictEqual(run(['page', 'task-demo', '--root', dir], dir).code, 0);
 
   const plan = run(['plan', 'task-demo', '--root', dir], dir);
   assert.strictEqual(plan.code, 0, plan.err);
-  assert.match(plan.out, /规范文档：写入 4 篇/);
+  assert.match(plan.out, /规范文档：写入 5 篇/);
 
-  for (const file of ['proposal.md', 'spec.md', 'design.md', 'tasks.md']) {
+  for (const file of ['flow.md', 'proposal.md', 'spec.md', 'design.md', 'tasks.md']) {
     const text = fs.readFileSync(path.join(dir, 'docs/specs/task-demo', file), 'utf8');
     assert.doesNotMatch(text, /待填/, `${file} 不应再有占位`);
   }
@@ -869,7 +869,7 @@ test('plan：人改过的文档默认不覆盖', () => {
 
   const res = run(['plan', 'task-demo', '--root', dir], dir);
   assert.strictEqual(res.code, 0, res.err);
-  assert.match(res.out, /保留 1 篇|保留 4 篇/);
+  assert.match(res.out, /保留 1 篇|保留 5 篇/);
   assert.match(fs.readFileSync(proposal, 'utf8'), /只允许内网访问/);
 });
 
@@ -882,7 +882,11 @@ test('plan：建任务时自动生成方案页，默认待确认', () => {
   assert.ok(fs.existsSync(plan), 'page 应生成 plan.html');
   const html = fs.readFileSync(plan, 'utf8');
   assert.match(html, /data-plan-status="待确认"/);
-  for (const section of ['goal', 'approach', 'ui', 'flow', 'risks', 'accept', 'confirm']) {
+  assert.match(html, /data-flow-status="待确认"/);
+  assert.match(html, /id="business-flow"/);
+  assert.match(html, /data-flow-diagram/);
+  assert.match(html, /class="flow-node"/);
+  for (const section of ['business-flow', 'goal', 'approach', 'ui', 'flow', 'risks', 'accept', 'confirm']) {
     assert.match(html, new RegExp(`data-section="${section}"`), `方案页缺少 ${section}`);
   }
 });
@@ -1445,11 +1449,17 @@ function startPlansServer(dir, port = 0) {
   });
 }
 
-function postJson(port, api, payload) {
+function postJson(port, api, payload, options = {}) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      Origin: `http://127.0.0.1:${port}`,
+      ...(options.headers || {}),
+    };
     const req = http.request(
-      {host: '127.0.0.1', port, path: api, method: 'POST', headers: {'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body)}},
+      {host: '127.0.0.1', port, path: api, method: 'POST', headers},
       (res) => {
         let text = '';
         res.on('data', (chunk) => { text += chunk; });
@@ -1464,9 +1474,9 @@ function postJson(port, api, payload) {
   });
 }
 
-function getText(port, pathname) {
+function getText(port, pathname, headers = {}) {
   return new Promise((resolve, reject) => {
-    http.get({host: '127.0.0.1', port, path: pathname}, (res) => {
+    http.get({host: '127.0.0.1', port, path: pathname, headers}, (res) => {
       let text = '';
       res.on('data', (chunk) => { text += chunk; });
       res.on('end', () => resolve({status: res.statusCode, text, headers: res.headers}));
@@ -1530,6 +1540,11 @@ test('plans.html：init 生成，列出任务并内嵌文档内容', () => {
   assert.match(text, /data-progress/);
   assert.match(text, /progress-modal/);
   assert.match(text, /data-collapse/);
+  assert.doesNotMatch(text, /<th>UI<\/th>/);
+  assert.doesNotMatch(text, /<th>数模<\/th>/);
+  assert.match(text, /data-ui="' \+ index \+ '">UI<\/button>/);
+  assert.match(text, /data-db="' \+ index \+ '">数模<\/button>/);
+  assert.match(text, /modal-refresh/);
   assert.match(text, /harnessStartConversation/);
   assert.match(text, /EventSource/);
   assert.match(text, /live-state/);
@@ -1602,6 +1617,28 @@ test('plans --serve：删除 / 重跑 / 保存 三个动作都落盘', async () 
   }
 });
 
+test('plans --serve：拒绝 DNS 重绑定和跨站写入', async () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'task-demo', '--root', dir], dir).code, 0);
+
+  const server = await startPlansServer(dir);
+  try {
+    const rebound = await getText(server.port, '/api/tasks', {Host: 'evil.example'});
+    assert.strictEqual(rebound.status, 403);
+
+    const crossOrigin = await postJson(
+      server.port,
+      '/api/delete',
+      {task: 'task-demo'},
+      {headers: {Origin: 'https://evil.example'}}
+    );
+    assert.strictEqual(crossOrigin.status, 403);
+    assert.ok(fs.existsSync(path.join(dir, 'prototype/task-demo/progress.html')), '跨站请求删除了任务');
+  } finally {
+    server.child.kill('SIGKILL');
+  }
+});
+
 test('wiki：反推事实时排除 harness-cli 工具与它生成的文件', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ca-wiki-tool-'));
   // 项目自己的代码：Python
@@ -1624,4 +1661,448 @@ test('wiki：反推事实时排除 harness-cli 工具与它生成的文件', () 
   const features = fs.readFileSync(path.join(dir, 'docs/wiki/功能清单.md'), 'utf8');
   assert.doesNotMatch(features, /dsh-plugin-harness-cli/);
   assert.doesNotMatch(features, /业务域\/dsh-plugin-harness-cli/);
+});
+
+test('sql：首次生成骨架，补全 schema 后生成 Mermaid 与离线数模图', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'db-task', '--root', dir], dir);
+
+  const first = run(['sql', 'db-task', '--root', dir], dir);
+  assert.strictEqual(first.code, 1, `${first.out}${first.err}`);
+  assert.match(first.out, /DB001/);
+  assert.ok(fs.existsSync(path.join(dir, 'docs/specs/db-task/schema.sql')));
+  assert.ok(fs.existsSync(path.join(dir, 'docs/specs/db-task/database.md')));
+  const emptyPage = fs.readFileSync(path.join(dir, 'prototype/db-task/db/index.html'), 'utf8');
+  assert.match(emptyPage, /还没有表/);
+
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/db-task/schema.sql'),
+    [
+      'CREATE TABLE user_account (',
+      '  user_account_id bigint PRIMARY KEY,',
+      '  email varchar(255) NOT NULL UNIQUE,',
+      '  created_at timestamptz NOT NULL,',
+      '  updated_at timestamptz NOT NULL',
+      ');',
+      'CREATE TABLE login_attempt (',
+      '  login_attempt_id bigint PRIMARY KEY,',
+      '  user_account_id bigint NOT NULL REFERENCES user_account (user_account_id),',
+      '  created_at timestamptz NOT NULL,',
+      '  updated_at timestamptz NOT NULL',
+      ');',
+      'CREATE INDEX idx_login_attempt_user_account_id ON login_attempt (user_account_id);',
+      '',
+    ].join('\n')
+  );
+
+  const second = run(['sql', 'db-task', '--root', dir], dir);
+  assert.strictEqual(second.code, 0, `${second.out}${second.err}`);
+  assert.match(second.out, /2 张表 \/ 1 条关系/);
+  const mermaid = fs.readFileSync(path.join(dir, 'docs/specs/db-task/er.mmd'), 'utf8');
+  assert.match(mermaid, /erDiagram/);
+  assert.match(mermaid, /user_account \|\|--o\{ login_attempt : "user_account_id"/);
+  const page = fs.readFileSync(path.join(dir, 'prototype/db-task/db/index.html'), 'utf8');
+  assert.match(page, /data-table="user_account"/);
+  assert.match(page, /data-table="login_attempt"/);
+  assert.match(page, /关系说明/);
+  assert.match(page, /字段说明/);
+  assert.doesNotMatch(page, /\{\{/);
+
+  const databaseDoc = fs.readFileSync(path.join(dir, 'docs/specs/db-task/database.md'), 'utf8');
+  assert.match(databaseDoc, /harness-db:begin/);
+  assert.match(databaseDoc, /关系说明/);
+  assert.match(databaseDoc, /字段说明/);
+  assert.strictEqual((databaseDoc.match(/harness-db:begin/g) || []).length, 1);
+
+  const overview = fs.readFileSync(path.join(dir, 'prototype/db.html'), 'utf8');
+  assert.match(overview, /schema\.sql 源码/);
+  assert.match(overview, /CREATE TABLE user_account/);
+  assert.match(overview, /关系说明/);
+});
+
+test('sql：schema 有命名 / 主键 / 浮点金额问题时退出 1 并把问题写进数模图', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'bad-db', '--root', dir], dir);
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/bad-db/schema.sql'),
+    [
+      'CREATE TABLE BadTable (',
+      '  id int,',
+      '  amount float',
+      ');',
+      '',
+    ].join('\n')
+  );
+
+  const res = run(['sql', 'bad-db', '--root', dir], dir);
+  assert.strictEqual(res.code, 1, `${res.out}${res.err}`);
+  assert.match(res.out, /DB002/);
+  assert.match(res.out, /DB004/);
+  assert.match(res.out, /DB010/);
+  const page = fs.readFileSync(path.join(dir, 'prototype/bad-db/db/index.html'), 'utf8');
+  assert.match(page, /DB004/);
+  assert.match(page, /DB010/);
+});
+
+test('delete：支持一次删除多个任务，并清理重跑备份', () => {
+  const dir = repo(['--preset', 'prototype']);
+  for (const name of ['task-a', 'task-b', 'keep-me']) {
+    run(['page', name, '--root', dir], dir);
+  }
+  const backup = path.join(dir, '.harness', '.rerun-task-a-ui');
+  fs.mkdirSync(backup, {recursive: true});
+  fs.writeFileSync(path.join(backup, 'index.html'), '<html></html>');
+
+  const preview = run(['delete', 'task-a', 'task-b', '--root', dir], dir);
+  assert.strictEqual(preview.code, 1);
+  assert.match(preview.out, /task-a、task-b/);
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/task-a')), '预演不能删文件');
+
+  const done = run(['delete', 'task-a', 'task-b', '--yes', '--root', dir], dir);
+  assert.strictEqual(done.code, 0, `${done.out}${done.err}`);
+  assert.ok(!fs.existsSync(path.join(dir, 'prototype/task-a')));
+  assert.ok(!fs.existsSync(path.join(dir, 'docs/specs/task-a')));
+  assert.ok(!fs.existsSync(path.join(dir, 'prototype/task-b')));
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/keep-me')), '未选中的任务必须保留');
+  assert.ok(!fs.existsSync(backup), '重跑备份属于任务相关数据，应一并清理');
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8'), /task-a/);
+});
+
+test('sql：生成整体数模图，并在 plans.html 暴露单任务 / 整体预览入口', () => {
+  const dir = repo(['--preset', 'prototype']);
+  for (const name of ['task-a', 'task-b']) {
+    assert.strictEqual(run(['page', name, '--root', dir], dir).code, 0);
+  }
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/task-a/schema.sql'),
+    [
+      'CREATE TABLE user_account (',
+      '  user_account_id bigint PRIMARY KEY, -- 用户主键',
+      '  email varchar(255) NOT NULL, -- 登录邮箱',
+      '  created_at timestamptz NOT NULL,',
+      '  updated_at timestamptz NOT NULL',
+      ');',
+      "COMMENT ON TABLE user_account IS '用户账号';",
+      "COMMENT ON COLUMN user_account.created_at IS '创建时间';",
+      "COMMENT ON COLUMN user_account.updated_at IS '更新时间';",
+      '',
+    ].join('\n')
+  );
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/task-b/schema.sql'),
+    [
+      'CREATE TABLE login_attempt (',
+      '  login_attempt_id bigint PRIMARY KEY,',
+      '  user_account_id bigint NOT NULL REFERENCES user_account (user_account_id), -- 所属账号',
+      '  created_at timestamptz NOT NULL,',
+      '  updated_at timestamptz NOT NULL',
+      ');',
+      "COMMENT ON TABLE login_attempt IS '登录尝试';",
+      "COMMENT ON COLUMN login_attempt.login_attempt_id IS '尝试主键';",
+      "COMMENT ON COLUMN login_attempt.created_at IS '创建时间';",
+      "COMMENT ON COLUMN login_attempt.updated_at IS '更新时间';",
+      'CREATE INDEX idx_login_attempt_user ON login_attempt (user_account_id);',
+      '',
+    ].join('\n')
+  );
+  assert.strictEqual(run(['sql', 'task-a', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['sql', 'task-b', '--root', dir], dir).code, 0);
+
+  const overviewFile = path.join(dir, 'prototype/db.html');
+  assert.ok(fs.existsSync(overviewFile), '应生成整体数模图');
+  const overview = fs.readFileSync(overviewFile, 'utf8');
+  assert.match(overview, /data-table="user_account"/);
+  assert.match(overview, /data-table="login_attempt"/);
+  assert.match(overview, /所属账号/, '整体图也应带字段说明');
+  assert.match(overview, /window\.__harnessDb/);
+  assert.match(overview, /"positions":\{\}/);
+
+  const plans = fs.readFileSync(path.join(dir, 'plans.html'), 'utf8');
+  assert.match(plans, /"hasDb":true/);
+  assert.match(plans, /"dbPage":"prototype\/db\.html"/);
+  assert.match(plans, /db-overview/);
+  assert.match(plans, /data-db/);
+});
+
+test('plans --serve：/api/db-layout 保存数模图布局，整体图与单任务图可直接预览', async () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'db-task', '--root', dir], dir).code, 0);
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/db-task/schema.sql'),
+    [
+      'CREATE TABLE user_account (',
+      '  user_account_id bigint PRIMARY KEY, -- 用户主键',
+      '  email varchar(255) NOT NULL, -- 登录邮箱',
+      '  created_at timestamptz NOT NULL,',
+      '  updated_at timestamptz NOT NULL',
+      ');',
+      "COMMENT ON TABLE user_account IS '用户账号';",
+      "COMMENT ON COLUMN user_account.created_at IS '创建时间';",
+      "COMMENT ON COLUMN user_account.updated_at IS '更新时间';",
+      '',
+    ].join('\n')
+  );
+  assert.strictEqual(run(['sql', 'db-task', '--root', dir], dir).code, 0);
+
+  const server = await startPlansServer(dir);
+  try {
+    const saved = await postJson(server.port, '/api/db-layout', {
+      version: 1,
+      positions: {user_account: {x: 42, y: 24}},
+      updatedAt: new Date().toISOString(),
+    });
+    assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+    const layoutFile = path.join(dir, 'prototype/db-layout.json');
+    assert.ok(fs.existsSync(layoutFile));
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(layoutFile, 'utf8')).positions.user_account, {x: 42, y: 24});
+
+    const loaded = await getText(server.port, '/api/db-layout');
+    assert.strictEqual(loaded.status, 200);
+    assert.deepStrictEqual(JSON.parse(loaded.text).positions.user_account, {x: 42, y: 24});
+
+    const overview = await getText(server.port, '/prototype/db.html');
+    assert.strictEqual(overview.status, 200);
+    assert.match(overview.text, /window\.__HARNESS_DB__/);
+    assert.match(overview.text, /data-table="user_account"/);
+
+    const taskDb = await getText(server.port, '/prototype/db-task/db/index.html');
+    assert.strictEqual(taskDb.status, 200);
+    assert.match(taskDb.text, /关系说明|字段说明/);
+  } finally {
+    server.child.kill('SIGKILL');
+  }
+});
+
+test('plans --serve：/api/save-db 保存 database.md / schema.sql 并刷新数模图与总览', async () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'db-edit', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['sql', 'db-edit', '--root', dir], dir).code, 1, '空 schema 应先失败并生成骨架');
+
+  const server = await startPlansServer(dir);
+  try {
+    const saved = await postJson(server.port, '/api/save-db', {
+      task: 'db-edit',
+      docs: {
+        database: '# 数据模型\n\n| 表 | 说明 |\n|---|---|\n| user_account | 用户账号 |\n',
+        schema: [
+          'CREATE TABLE user_account (',
+          '  user_account_id bigint PRIMARY KEY, -- 用户主键',
+          '  email varchar(255) NOT NULL, -- 登录邮箱',
+          '  created_at timestamptz NOT NULL,',
+          '  updated_at timestamptz NOT NULL',
+          ');',
+          "COMMENT ON TABLE user_account IS '用户账号';",
+          "COMMENT ON COLUMN user_account.created_at IS '创建时间';",
+          "COMMENT ON COLUMN user_account.updated_at IS '更新时间';",
+          '',
+        ].join('\n'),
+      },
+    });
+    assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+    assert.strictEqual(saved.body.sql.status, 0, saved.body.sql.out);
+    assert.deepStrictEqual(saved.body.written.sort(), ['database.md', 'schema.sql']);
+    assert.match(fs.readFileSync(path.join(dir, 'docs/specs/db-edit/schema.sql'), 'utf8'), /email varchar/);
+    const dbPage = fs.readFileSync(path.join(dir, 'prototype/db-edit/db/index.html'), 'utf8');
+    assert.match(dbPage, /data-table="user_account"/);
+    assert.match(dbPage, /字段说明/);
+    assert.match(dbPage, /登录邮箱/);
+    assert.match(fs.readFileSync(path.join(dir, 'plans.html'), 'utf8'), /登录邮箱/);
+    assert.ok(fs.existsSync(path.join(dir, 'prototype/db.html')));
+  } finally {
+    server.child.kill('SIGKILL');
+  }
+});
+
+test('ui / sql：追加 progress 记录并更新 task_queue；progress 同步队列，delete 清理条目', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'queue-task', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['ui', 'queue-task', '--root', dir], dir).code, 0);
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/queue-task/schema.sql'),
+    [
+      'CREATE TABLE user_account (',
+      '  user_account_id bigint PRIMARY KEY, -- 用户主键',
+      '  email varchar(255) NOT NULL, -- 登录邮箱',
+      '  created_at timestamptz NOT NULL,',
+      '  updated_at timestamptz NOT NULL',
+      ');',
+      "COMMENT ON TABLE user_account IS '用户账号';",
+      "COMMENT ON COLUMN user_account.created_at IS '创建时间';",
+      "COMMENT ON COLUMN user_account.updated_at IS '更新时间';",
+      '',
+    ].join('\n')
+  );
+  assert.strictEqual(run(['sql', 'queue-task', '--root', dir], dir).code, 0);
+
+  const page = fs.readFileSync(path.join(dir, 'prototype/queue-task/progress.html'), 'utf8');
+  assert.match(page, /UI 设计稿已生成/);
+  assert.match(page, /数据库设计已生成/);
+
+  const queueFile = path.join(dir, 'task_queue.json');
+  const queue = readJson(queueFile);
+  assert.strictEqual(queue.items.length, 1);
+  const item = queue.items[0];
+  assert.strictEqual(item.task, 'queue-task');
+  assert.strictEqual(item.status, '进行中');
+  assert.strictEqual(item.progress, 0);
+  assert.ok(item.artifacts.includes('prototype/queue-task/ui/index.html'));
+  assert.ok(item.artifacts.includes('docs/specs/queue-task/schema.sql'));
+  assert.ok(item.artifacts.includes('prototype/db.html'));
+  assert.ok(item.updatedAt);
+
+  // progress 只更新已有队列条目：状态 / 进度跟着任务页走
+  assert.strictEqual(run(['progress', 'queue-task', '--step', '1', '--pct', '100', '--root', dir], dir).code, 0);
+  const after = readJson(queueFile);
+  assert.strictEqual(after.items[0].progress, 33);
+  assert.strictEqual(after.items[0].status, '进行中');
+
+  // 删除任务时队列条目一并清理
+  assert.strictEqual(run(['delete', 'queue-task', '--yes', '--root', dir], dir).code, 0);
+  assert.deepStrictEqual(readJson(queueFile).items, []);
+});
+
+test('HTML 骨架屏：plans / progress / plan / ui / db 都先显示 skeleton', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'skeleton-task', '--root', dir], dir).code, 0);
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/skeleton-task/schema.sql'),
+    'CREATE TABLE skeleton_entity (skeleton_entity_id bigint PRIMARY KEY, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL);\n'
+  );
+  assert.strictEqual(run(['sql', 'skeleton-task', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['ui', 'skeleton-task', '--root', dir], dir).code, 0);
+
+  for (const rel of [
+    'plans.html',
+    'prototype/progress.html',
+    'prototype/skeleton-task/progress.html',
+    'prototype/skeleton-task/plan.html',
+    'prototype/skeleton-task/ui/index.html',
+    'prototype/skeleton-task/db/index.html',
+    'prototype/db.html',
+  ]) {
+    const text = fs.readFileSync(path.join(dir, rel), 'utf8');
+    assert.match(text, /id="hcli-skeleton"/, `${rel} 缺少骨架屏`);
+    assert.match(text, /hcli-sk/, `${rel} 缺少骨架样式`);
+  }
+  const plans = fs.readFileSync(path.join(dir, 'plans.html'), 'utf8');
+  assert.match(plans, /preview-skeleton/);
+  assert.match(plans, /progress-skeleton/);
+});
+
+test('plan --confirm：任务模式 auto 时自动确认，不需要 --by；手动模式仍要求 --by', () => {
+  const autoDir = repo(['--preset', 'prototype']);
+  run(['page', 'auto-confirm-task', '--root', autoDir], autoDir);
+  fillTask(autoDir, 'auto-confirm-task');
+  fs.writeFileSync(
+    path.join(autoDir, 'prototype/auto-confirm-task/.harness-mode.json'),
+    `${JSON.stringify({mode: 'auto'})}\n`
+  );
+  assert.strictEqual(run(['review', 'auto-confirm-task', '--root', autoDir], autoDir).code, 0);
+  const auto = run(['plan', 'auto-confirm-task', '--confirm', '--root', autoDir], autoDir);
+  assert.strictEqual(auto.code, 0, `${auto.out}${auto.err}`);
+  const plan = fs.readFileSync(path.join(autoDir, 'prototype/auto-confirm-task/plan.html'), 'utf8');
+  assert.match(plan, /data-plan-status="已确认"/);
+  assert.match(plan, /data-flow-status="已确认"/);
+  assert.match(plan, /data-confirmed-by="自动 loop"/);
+  assert.match(
+    fs.readFileSync(path.join(autoDir, 'docs/specs/auto-confirm-task/review.md'), 'utf8'),
+    /确认人：自动 loop/
+  );
+
+  const manualDir = repo(['--preset', 'prototype']);
+  run(['page', 'manual-confirm-task', '--root', manualDir], manualDir);
+  fillTask(manualDir, 'manual-confirm-task');
+  assert.strictEqual(run(['review', 'manual-confirm-task', '--root', manualDir], manualDir).code, 0);
+  const manual = run(['plan', 'manual-confirm-task', '--confirm', '--root', manualDir], manualDir);
+  assert.strictEqual(manual.code, 2);
+  assert.match(manual.err, /需要 --by/);
+});
+
+test('delete：删除后同步 db.html / db-layout / plans / progress / wiki', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'task-a', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['page', 'task-b', '--root', dir], dir).code, 0);
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/task-a/schema.sql'),
+    'CREATE TABLE table_a (id bigint PRIMARY KEY, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL);\n' +
+      "COMMENT ON TABLE table_a IS 'A 表';\n"
+  );
+  fs.writeFileSync(
+    path.join(dir, 'docs/specs/task-b/schema.sql'),
+    'CREATE TABLE table_b (id bigint PRIMARY KEY, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL);\n' +
+      "COMMENT ON TABLE table_b IS 'B 表';\n"
+  );
+  assert.strictEqual(run(['sql', 'task-a', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['sql', 'task-b', '--root', dir], dir).code, 0);
+  fs.writeFileSync(
+    path.join(dir, 'prototype/db-layout.json'),
+    `${JSON.stringify({version: 1, positions: {table_a: {x: 10, y: 20}, table_b: {x: 30, y: 40}}}, null, 2)}\n`
+  );
+
+  const before = fs.readFileSync(path.join(dir, 'prototype/db.html'), 'utf8');
+  assert.match(before, /table_a/);
+  assert.match(before, /table_b/);
+
+  const removed = run(['delete', 'task-a', '--yes', '--root', dir], dir);
+  assert.strictEqual(removed.code, 0, `${removed.out}${removed.err}`);
+  assert.match(removed.out, /docs\/wiki/);
+
+  const db = fs.readFileSync(path.join(dir, 'prototype/db.html'), 'utf8');
+  assert.doesNotMatch(db, /table_a/);
+  assert.match(db, /table_b/);
+
+  const layout = readJson(path.join(dir, 'prototype/db-layout.json'));
+  assert.ok(!('table_a' in layout.positions), '已删除表的布局坐标应清理');
+  assert.ok('table_b' in layout.positions);
+
+  const plans = fs.readFileSync(path.join(dir, 'plans.html'), 'utf8');
+  assert.doesNotMatch(plans, /"name":"task-a"/);
+  assert.match(plans, /"name":"task-b"/);
+
+  const progress = fs.readFileSync(path.join(dir, 'prototype/progress.html'), 'utf8');
+  assert.doesNotMatch(progress, /data-task="task-a"/);
+  assert.match(progress, /data-task="task-b"/);
+
+  assert.ok(fs.existsSync(path.join(dir, 'docs/wiki/README.md')), '删除后应同步 docs/wiki');
+});
+
+
+test('业务流程图：page 生成 flow.md 与 plan 流程图，确认后标记已确认', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'flow-task', '--root', dir], dir).code, 0);
+  const flow = fs.readFileSync(path.join(dir, 'docs/specs/flow-task/flow.md'), 'utf8');
+  assert.match(flow, /业务流程图/);
+  assert.match(flow, /```mermaid/);
+  assert.match(flow, /flowchart TD/);
+
+  const planFile = path.join(dir, 'prototype/flow-task/plan.html');
+  const before = fs.readFileSync(planFile, 'utf8');
+  assert.match(before, /0. 业务流程图/);
+  assert.match(before, /data-flow-status="待确认"/);
+  assert.match(before, /data-flow-diagram/);
+
+  fillTask(dir, 'flow-task');
+  reviewAndConfirm(dir, 'flow-task');
+  const after = fs.readFileSync(planFile, 'utf8');
+  assert.match(after, /data-flow-status="已确认"/);
+  assert.match(after, /data-flow-status-label>已确认</);
+});
+
+test('progress 方案预览弹窗；plan 流程图源文件弹窗预览', () => {
+  const dir = repo(['--preset', 'prototype']);
+  run(['page', 'preview-task', '--root', dir], dir);
+
+  const progress = fs.readFileSync(path.join(dir, 'prototype/preview-task/progress.html'), 'utf8');
+  assert.match(progress, /id="plan-preview"/);
+  assert.match(progress, /id="plan-modal"/);
+  assert.match(progress, /id="plan-frame"/);
+  assert.match(progress, /方案预览/);
+  assert.match(progress, /frame\.src = 'plan\.html'/);
+
+  const plan = fs.readFileSync(path.join(dir, 'prototype/preview-task/plan.html'), 'utf8');
+  assert.match(plan, /data-flow-preview/);
+  assert.match(plan, /id="flow-doc-modal"/);
+  assert.match(plan, /id="flow-doc-body"/);
+  assert.match(plan, /docs\/specs\/preview-task\/flow\.md/);
+  assert.match(plan, /点击预览/);
 });

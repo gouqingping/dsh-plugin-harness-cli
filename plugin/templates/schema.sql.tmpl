@@ -1,0 +1,30 @@
+-- {{task}} · 数据库 schema（Google 数模规范）
+--
+-- 唯一真源：本文件。docs/specs/{{task}}/er.mmd 与 prototype/{{task}}/db/index.html
+-- 由 /harness-cli sql 从本文件生成，不要手改生成物。
+--
+-- 规则：
+--   表名 / 字段名 snake_case，表名单数，避开 SQL 保留字
+--   每张表必须有主键；外键列名 <被引用表>_id，并为外键建索引
+--   金额用 numeric(19,4)，时间用 timestamptz，布尔用 boolean
+--   核心表带 created_at / updated_at；软删除用 deleted_at
+--   业务规则写进 DDL（NOT NULL / UNIQUE / CHECK / FK），不用触发器实现业务逻辑
+--   每张表写 COMMENT ON TABLE，每个字段写 COMMENT ON COLUMN（或行尾 -- 说明）；
+--   说明会显示在 prototype/<任务>/db/index.html 的「关系说明 / 字段说明」里
+--
+-- 设计完成后运行：/harness-cli sql {{task}}
+
+-- 待填：按 docs/specs/{{task}}/proposal.md、spec.md、design.md 与 tasks.md 建模。
+-- 下面只是格式示例，请删除后写真实业务表：
+--
+-- CREATE TABLE example_entity (
+--   example_entity_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+--   name varchar(128) NOT NULL, -- 名称
+--   created_at timestamptz NOT NULL DEFAULT now(),
+--   updated_at timestamptz NOT NULL DEFAULT now()
+-- );
+-- COMMENT ON TABLE example_entity IS '示例实体';
+-- COMMENT ON COLUMN example_entity.example_entity_id IS '主键';
+-- COMMENT ON COLUMN example_entity.name IS '名称';
+--
+-- CREATE INDEX idx_example_entity_name ON example_entity (name);

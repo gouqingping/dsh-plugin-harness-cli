@@ -16,8 +16,29 @@
 | README 写清一句话价值 / 兼容 / 权限 | 关键词断言 |
 | 许可证 | 根 `package.json` 的 `license` + 仓库根 `LICENSE` |
 | CLI 入口存在 | `plugin/bin/dsh-plugin-harness-cli.js` |
+| Codex 插件可安装 | `.codex-plugin/plugin.json`、`.mcp.json`、`skills/`、`.agents/plugins/marketplace.json` 相互引用有效 |
 
 跑完 `node --test` 即完成本地自查。
+
+## 一之二、Codex 插件市场
+
+Codex 使用 Git 市场安装，不读取 DSH 的 `dsh.bundle`：
+
+```sh
+codex plugin marketplace add gouqingping/dsh-plugin-harness-cli
+codex plugin add dsh-plugin-harness-cli@dsh-plugin-harness-cli
+codex plugin list
+codex mcp list
+```
+
+- 市场索引：`.agents/plugins/marketplace.json`
+- 插件清单：`.codex-plugin/plugin.json`
+- 技能：`skills/harness-cli/SKILL.md`
+- MCP：`.mcp.json` 启动 `node ./plugin/codex-mcp.mjs`
+- 工具：与 DSH 同名的 13 个 `harness_cli_*` 工具
+
+已在 Codex CLI 0.144.6 上用隔离 `CODEX_HOME` 验证：市场添加成功、插件安装为
+`installed, enabled`，`codex mcp list` 显示 `harness-cli` 服务。
 
 ## 二、远端状态
 

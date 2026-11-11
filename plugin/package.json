@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-harness-cli",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "private": true,
   "description": "公共项目配置工具本体：按 Harness 规范生成并校验项目配置（AGENTS.md / 四件套 / 门禁）。plugin/ 自包含，可整体拷走。",
   "bin": {
@@ -20,7 +20,8 @@
     "src",
     "templates",
     "cordis.mjs",
+    "codex-mcp.mjs",
     "vendor"
   ],
-  "license": "MIT"
+  "license": "CC0-1.0"
 }

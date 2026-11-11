@@ -5,8 +5,8 @@
  *
  * - `init` 会生成一份；`plans` 命令重新生成；`page` / `plan` / `ui` / `progress` 之后自动刷新。
  * - 以文件方式打开（file://）时只读：删除 / 重跑 / 保存会提示复制命令。
- * - 运行 `plans --serve` 后，页面通过本机 HTTP 服务调用 /api/delete、/api/rerun、/api/save，
- *   按钮才真正落盘（只绑定 127.0.0.1，无鉴权，仅供本机使用）。
+ * - 运行 `plans --serve` 后，页面通过本机 HTTP 服务调用 /api/delete、/api/rerun、/api/save、
+ *   /api/db-layout，按钮才真正落盘（只绑定 127.0.0.1，无鉴权，仅供本机使用）。
  */
 
 const fs = require('fs');
@@ -15,12 +15,27 @@ const path = require('path');
 const {spawnSync} = require('child_process');
 const {loadTemplate} = require('./templates');
 const {render} = require('./render');
-const {exists, isDir, readIfExists, writeFileSafe, toPosix} = require('./util');
+const {exists, isDir, readIfExists, readJsonIfExists, writeFileSafe, toPosix, today} = require('./util');
+const {
+  DB_LAYOUT_FILE,
+  readDbLayout,
+  writeDbLayout,
+  loadOverall,
+  renderOverviewPage,
+} = require('./db');
 
 const PLANS_FILE = 'plans.html';
 const BIN = path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js');
-const DOC_NAMES = ['proposal.md', 'spec.md', 'design.md', 'tasks.md'];
-const DOC_KEYS = {proposal: 'proposal.md', spec: 'spec.md', design: 'design.md', tasks: 'tasks.md'};
+const DOC_NAMES = ['flow.md', 'proposal.md', 'spec.md', 'design.md', 'tasks.md'];
+const DOC_KEYS = {
+  flow: 'flow.md',
+  proposal: 'proposal.md',
+  spec: 'spec.md',
+  design: 'design.md',
+  tasks: 'tasks.md',
+  database: 'database.md',
+  schema: 'schema.sql',
+};
 
 function protoConfig(config) {
   return (config.presets && config.presets.prototype) || {};
@@ -71,6 +86,7 @@ function collectTasks(root, config) {
       total: parsed.total,
       updated: parsed.updated,
       hasUi: exists(path.join(dir, entry.name, 'ui', 'index.html')),
+      hasDb: exists(path.join(dir, entry.name, 'db', 'index.html')),
       docs,
     });
   }
@@ -90,10 +106,13 @@ function collectTasks(root, config) {
  */
 function renderPlans(root, config) {
   const tasks = collectTasks(root, config);
-  const data = JSON.stringify({project: config.project.name, tasks}).replace(/</g, '\\u003c');
+  const dbFile = path.join(root, protoConfig(config).dir || 'prototype', 'db.html');
+  const dbPage = exists(dbFile) ? toPosix(path.relative(root, dbFile)) : '';
+  const data = JSON.stringify({project: config.project.name, tasks, dbPage}).replace(/</g, '\\u003c');
   return render(loadTemplate('plans'), {
     project: {name: config.project.name},
     taskCount: tasks.length,
+    dbPage,
     plansJson: data,
     nowIso: new Date().toISOString(),
   });
@@ -129,7 +148,8 @@ function runCli(args, root) {
  * 删除任务：任务页、设计稿、规范文档、复盘。
  * @returns {{ok: boolean, removed: string[]}}
  */
-function deleteTask(root, config, task) {
+function deleteTask(root, config, task, options) {
+  const opts = options || {};
   const removed = [];
   const dirs = [taskDir(root, config, task), specDir(root, config, task)];
   for (const dir of dirs) {
@@ -138,9 +158,84 @@ function deleteTask(root, config, task) {
       removed.push(toPosix(path.relative(root, dir)));
     }
   }
+  // 任务队列里的对应条目也属于「相关数据」，与任务一起删除。
+  try {
+    const queueFile = path.join(root, config.paths.taskQueue);
+    const queue = readJsonIfExists(queueFile, null);
+    if (queue && Array.isArray(queue.items)) {
+      const nextItems = queue.items.filter((item) => !item || item.task !== task);
+      if (nextItems.length !== queue.items.length) {
+        queue.items = nextItems;
+        queue.updatedAt = new Date().toISOString();
+        writeFileSafe(queueFile, `${JSON.stringify(queue, null, 2)}\n`);
+      }
+    }
+  } catch (err) {
+    // 队列坏了不阻塞删除；check / 手工修队列会把问题暴露出来。
+  }
+
+  // 「重跑」会先把 UI 设计稿备份到 .harness/.rerun-<task>-ui；删除任务时这份相关数据也不该留下。
+  // 但 rerunTask 正靠这份备份恢复设计稿，调用时传 keepBackup 跳过清理。
+  const backup = path.join(root, config.paths.harness || '.harness', `.rerun-${task}-ui`);
+  if (opts.keepBackup !== true && exists(backup)) {
+    fs.rmSync(backup, {recursive: true, force: true});
+    removed.push(toPosix(path.relative(root, backup)));
+  }
+  if (opts.deferRefresh !== true) refreshDerived(root, config, {wiki: opts.wiki === true});
+  return {ok: true, removed};
+}
+
+/**
+ * 删除后统一刷新派生页面：
+ * - prototype/progress.html（任务总览）
+ * - plans.html（任务操作台）
+ * - prototype/db.html（整体数模图，按剩余 schema 重生成）
+ * - prototype/db-layout.json（清掉已删除表的布局坐标）
+ * - 可选 docs/wiki（wiki --update，保留人工正文，只更新受管区块）
+ * @returns {{db: boolean, wiki: {status: number, out: string} | null}}
+ */
+function refreshDerived(root, config, options) {
+  const opts = options || {};
+  const proto = protoConfig(config);
+  const dbFile = path.join(root, proto.dir || 'prototype', 'db.html');
+  let dbUpdated = false;
+  try {
+    const layout = readDbLayout(root, config);
+    const overall = loadOverall(root, config);
+    // 先清理已删除表的布局坐标，再渲染整体图；否则新页面会继续内嵌旧坐标。
+    const tableNames = new Set(overall.tables.map((table) => table.name));
+    const positions = {...(layout.positions || {})};
+    let layoutChanged = false;
+    for (const name of Object.keys(positions)) {
+      if (tableNames.has(name)) continue;
+      delete positions[name];
+      layoutChanged = true;
+    }
+    if (layoutChanged) {
+      writeDbLayout(root, config, {
+        version: 1,
+        positions,
+        updatedAt: new Date().toISOString(),
+      });
+      // loadOverall 已经读过旧 layout；渲染前替换成清理后的坐标。
+      overall.layout = {version: 1, positions};
+      dbUpdated = true;
+    }
+    if (exists(dbFile)) {
+      writeFileSafe(dbFile, renderOverviewPage(overall, {generatedAt: new Date().toISOString()}));
+      dbUpdated = true;
+    }
+  } catch (err) {
+    // 数模页刷新失败不阻塞删除；下一次 sql 会重建。
+  }
   syncIndex(root, config);
   refreshPlans(root, config);
-  return {ok: true, removed};
+  let wiki = null;
+  if (opts.wiki === true) {
+    const run = runCli(['wiki', '--update'], root);
+    wiki = {status: run.status, out: run.out};
+  }
+  return {db: dbUpdated, wiki};
 }
 
 /**
@@ -157,7 +252,7 @@ function rerunTask(root, config, task) {
     fs.cpSync(uiDir, backup, {recursive: true});
   }
 
-  deleteTask(root, config, task);
+  deleteTask(root, config, task, {keepBackup: true});
   const page = runCli(['page', task], root);
   if (page.status !== 0) return {ok: false, error: page.out || '重建任务页失败'};
   const plan = runCli(['plan', task], root);
@@ -222,12 +317,121 @@ function saveTaskDocs(root, config, task, docs) {
   for (const [key, name] of Object.entries(DOC_KEYS)) {
     const content = docs && typeof docs[key] === 'string' ? docs[key] : null;
     if (content === null) continue;
+    // 文件本来就不存在、用户也没填内容：交给 sql 生成骨架，不写空文件。
+    if (content.trim() === '' && !exists(path.join(dir, name))) continue;
     writeFileSafe(path.join(dir, name), content.endsWith('\n') ? content : `${content}\n`);
     written.push(name);
   }
   resetTask(root, config, task);
   refreshPlans(root, config);
   return {ok: true, written};
+}
+
+/** 任务开工模式的文件名（任务目录内，随任务一起删除）。 */
+const MODE_FILE = '.harness-mode.json';
+
+/** 任务开工模式文件绝对路径。 */
+function taskModeFile(root, config, task) {
+  return path.join(root, protoConfig(config).dir || 'prototype', task, MODE_FILE);
+}
+
+/**
+ * 读任务开工模式：auto（自动 loop）/ manual（手动）/ null（未选择）。
+ * @returns {'auto' | 'manual' | null}
+ */
+function readTaskMode(root, config, task) {
+  const data = readJsonIfExists(taskModeFile(root, config, task), null);
+  return data && (data.mode === 'auto' || data.mode === 'manual') ? data.mode : null;
+}
+
+/** 写入任务开工模式；后续方案确认据此决定是否自动选择「确认」。 */
+function writeTaskMode(root, config, task, mode) {
+  if (mode !== 'auto' && mode !== 'manual') {
+    return {ok: false, error: 'mode 只能是 auto / manual'};
+  }
+  writeFileSafe(
+    taskModeFile(root, config, task),
+    `${JSON.stringify({mode, selectedAt: new Date().toISOString()}, null, 2)}\n`
+  );
+  return {ok: true};
+}
+
+/**
+ * 更新任务队列 task_queue.json 里的一条任务记录。
+ * - ui / sql 生成产物后调用：写入 status / progress / artifacts / updatedAt；
+ * - progress 只更新已有记录（create:false），不会凭空给每个任务建条目；
+ * - 队列文件缺失时按 init 的结构补一个最小队列（create 默认 true）。
+ * @returns {{ok: boolean, item?: object, skipped?: string, error?: string}}
+ */
+function updateTaskQueue(root, config, task, options) {
+  const opts = options || {};
+  const file = path.join(root, config.paths.taskQueue);
+  let queue;
+  try {
+    queue = readJsonIfExists(file, null);
+  } catch (err) {
+    return {ok: false, error: err.message};
+  }
+  if (!queue || typeof queue !== 'object' || Array.isArray(queue)) {
+    if (opts.create === false) return {ok: true, skipped: 'missing'};
+    queue = {
+      wipLimit: 1,
+      items: [],
+      note: '队列 / 优先级 / 依赖 / WIP 四要素；同时 in_progress 的数量不得超过 wipLimit（默认 1 = 单 WIP，多会话并行时调大）。',
+      generatedBy: 'dsh-plugin-harness-cli',
+      generatedAt: today(),
+    };
+  }
+  if (!Array.isArray(queue.items)) queue.items = [];
+  if (!Number.isInteger(queue.wipLimit) || queue.wipLimit < 1) queue.wipLimit = 1;
+  const now = new Date().toISOString();
+  let item = queue.items.find((entry) => entry && entry.task === task);
+  if (!item) {
+    if (opts.create === false) return {ok: true, skipped: 'missing'};
+    item = {task, artifacts: []};
+    queue.items.push(item);
+  }
+  if (typeof opts.status === 'string' && opts.status.trim().length > 0) item.status = opts.status;
+  else if (typeof item.status !== 'string') item.status = '进行中';
+  if (Number.isFinite(opts.progress)) item.progress = Math.round(opts.progress);
+  const artifacts = new Set(
+    [...(Array.isArray(item.artifacts) ? item.artifacts : []), ...(Array.isArray(opts.artifacts) ? opts.artifacts : [])]
+      .filter((value) => typeof value === 'string' && value.trim().length > 0)
+  );
+  item.artifacts = [...artifacts];
+  item.updatedAt = now;
+  queue.updatedAt = now;
+  if (typeof queue.generatedAt !== 'string') queue.generatedAt = today();
+  if (typeof queue.generatedBy !== 'string') queue.generatedBy = 'dsh-plugin-harness-cli';
+  if (typeof queue.note !== 'string') {
+    queue.note = '队列 / 优先级 / 依赖 / WIP 四要素；同时 in_progress 的数量不得超过 wipLimit（默认 1 = 单 WIP，多会话并行时调大）。';
+  }
+  writeFileSafe(file, `${JSON.stringify(queue, null, 2)}\n`);
+  return {ok: true, item};
+}
+
+/**
+ * 保存数模设计文档，然后重跑 sql：刷新 er.mmd、单任务数模图与整体数模图。
+ * 与 saveTaskDocs 不同：这里不重启任务（进度 / 方案状态不动），只重建数模产物。
+ * @returns {{ok: boolean, written: string[], sql: {status: number, out: string}}}
+ */
+function saveDbDocs(root, config, task, docs) {
+  const dir = specDir(root, config, task);
+  const written = [];
+  for (const [key, name] of [
+    ['database', 'database.md'],
+    ['schema', 'schema.sql'],
+  ]) {
+    const content = docs && typeof docs[key] === 'string' ? docs[key] : null;
+    if (content === null) continue;
+    // 文件本来就不存在、用户也没填内容：交给 sql 生成骨架，不写空文件。
+    if (content.trim() === '' && !exists(path.join(dir, name))) continue;
+    writeFileSafe(path.join(dir, name), content.endsWith('\n') ? content : `${content}\n`);
+    written.push(name);
+  }
+  const sql = runCli(['sql', task], root);
+  refreshPlans(root, config);
+  return {ok: true, written, sql};
 }
 
 const MIME = {
@@ -311,6 +515,24 @@ function servePlans(root, config, port) {
   };
 
   const server = http.createServer(async (req, res) => {
+    const actualPort = server.address()?.port;
+    const allowedAuthorities = new Set([`127.0.0.1:${actualPort}`, `localhost:${actualPort}`]);
+    const allowedOrigins = new Set([...allowedAuthorities].map((authority) => `http://${authority}`));
+    const requestHost = String(req.headers.host || '').toLowerCase();
+    const requestOrigin = String(req.headers.origin || '').toLowerCase();
+
+    // 仅接受从本机回环地址打开的面板。Host 校验同时阻断 DNS 重绑定；
+    // POST 再校验 Origin 与 JSON Content-Type，阻断跨站表单或简单请求触发文件操作。
+    if (!allowedAuthorities.has(requestHost)) {
+      return sendJson(res, 403, {error: '仅允许通过本机回环地址访问'});
+    }
+    if (req.method === 'POST' && (
+      !allowedOrigins.has(requestOrigin) ||
+      !/^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type'] || ''))
+    )) {
+      return sendJson(res, 403, {error: '拒绝跨站或非 JSON 写入请求'});
+    }
+
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = decodeURIComponent(url.pathname);
 
@@ -334,6 +556,28 @@ function servePlans(root, config, port) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/db-layout') {
+      return sendJson(res, 200, readDbLayout(rootAbs, config));
+    }
+
+    if (req.method === 'POST' && pathname === '/api/db-layout') {
+      let payload;
+      try {
+        payload = JSON.parse((await readBody(req)) || '{}');
+      } catch (err) {
+        return sendJson(res, 400, {error: `请求不是合法 JSON：${err.message}`});
+      }
+      try {
+        const saved = writeDbLayout(rootAbs, config, payload);
+        const file = toPosix(
+          path.relative(rootAbs, path.join(rootAbs, protoConfig(config).dir || 'prototype', DB_LAYOUT_FILE))
+        );
+        return sendJson(res, 200, {ok: true, file, layout: saved});
+      } catch (err) {
+        return sendJson(res, 500, {error: err.message});
+      }
+    }
+
     if (req.method === 'POST' && pathname.startsWith('/api/')) {
       let payload;
       try {
@@ -348,12 +592,14 @@ function servePlans(root, config, port) {
       const action = pathname.slice('/api/'.length);
       try {
         if (action === 'delete') {
-          const removed = deleteTask(rootAbs, config, task);
+          const removed = deleteTask(rootAbs, config, task, {deferRefresh: true});
           if (removed.removed.length === 0) return sendJson(res, 404, {error: `任务「${task}」不存在或已删除`});
-          return sendJson(res, 200, removed);
+          const derived = refreshDerived(rootAbs, config, {wiki: true});
+          return sendJson(res, 200, {...removed, derived});
         }
         if (action === 'rerun') return sendJson(res, 200, rerunTask(rootAbs, config, task));
         if (action === 'save') return sendJson(res, 200, saveTaskDocs(rootAbs, config, task, payload.docs || {}));
+        if (action === 'save-db') return sendJson(res, 200, saveDbDocs(rootAbs, config, task, payload.docs || {}));
         return sendJson(res, 404, {error: '未知操作'});
       } catch (err) {
         return sendJson(res, 500, {error: err.message});
@@ -423,8 +669,14 @@ module.exports = {
   renderPlans,
   refreshPlans,
   deleteTask,
+  refreshDerived,
   rerunTask,
   saveTaskDocs,
+  saveDbDocs,
+  updateTaskQueue,
+  MODE_FILE,
+  readTaskMode,
+  writeTaskMode,
   resetTask,
   servePlans,
 };

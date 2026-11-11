@@ -1,14 +1,15 @@
 # dsh-plugin-harness-cli
 
-> **DSH 插件**：装好后在 DSH 里获得 12 个工具（`harness_cli_*`）与 1 条聚合斜杠命令（`/harness-cli`），
-> 让模型按同一套 Harness 规范生成、校验、推进项目，而不是靠提示词自觉。
+> **DSH / Codex 插件**：同一个包在 DSH 里提供 13 个工具（`harness_cli_*`）与 1 条聚合斜杠命令
+> （`/harness-cli`），在 Codex 里通过本地 MCP 提供同样的 13 个工具和一条 `$harness-cli` 技能；
+> 两个宿主共用 `src/`、`templates/` 与业务执行，不靠提示词各自发挥。
 
 [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/gouqingping/dsh-plugin-harness-cli)
 
 ## 安装（DSH 插件市场）
 
 ```sh
-# npm 最新发布 0.1.1；仓库当前版本 0.1.3（未发布），也是 DSH 插件中心用的安装命令
+# npm 最新发布 0.1.1；仓库当前版本 0.1.5（未发布），也是 DSH 插件中心用的安装命令
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
@@ -16,6 +17,26 @@ dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
 ```
 
 装完重启 DSH，然后在任意项目里执行 `/harness-cli` 并选「初始化」；命令与工具清单见 `/harness-cli help`。
+
+## 安装（Codex 插件市场）
+
+```sh
+# Git 市场；固定版本时在仓库名后加 @<ref>
+codex plugin marketplace add gouqingping/dsh-plugin-harness-cli
+codex plugin add dsh-plugin-harness-cli@dsh-plugin-harness-cli
+
+# 本地开发时直接添加当前仓库
+codex plugin marketplace add .
+```
+
+新开一个 Codex 会话后，插件会加载 `$harness-cli` 技能并启动本地 stdio MCP 服务。
+模型通过 `harness_cli_*` 工具调用现有 CLI；Codex 侧没有 DSH 的确认弹窗，所以覆盖、方案确认与删除
+都要求模型先向你说明影响并取得明确同意。检查安装状态：
+
+```sh
+codex plugin list
+codex mcp list
+```
 
 > 收录状态、提交模板与自查项见 [`docs/MARKETPLACE.md`](docs/MARKETPLACE.md)；
 > `node --test` 里的 `listing.test.js` 会断言仓库内的收录要求。
@@ -25,10 +46,12 @@ dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
 | 一句话价值 | 把「项目怎么协作」变成可生成、可校验的文件：入口 / 环境 / 范围 / 状态 / 门禁 / 规范文档 / 业务 wiki 全自动，模型直接调用。 |
 | 能力分类 | 开发与运维 |
 | 支持 profile | `web`、`desktop`（默认值 `web`，见安装命令） |
-| 兼容与运行要求 | DSH 0.2.x（安装与 profile 合成在 0.2.2-rc.1 验证；桌面端 profile 名为 `desktop`）；Node.js ≥ 18；零运行时依赖、离线可用；`style` 子命令需要本机 `python3` |
-| 权限与外部服务 | 只读写**目标仓库内**的文件；不联网、不收集数据；`plans --serve` 仅监听 `127.0.0.1`（可选） |
+| 兼容与运行要求 | DSH 0.2.x（安装与 profile 合成在 0.2.2-rc.1 验证；桌面端 profile 名为 `desktop`）；Codex CLI 0.144.x（插件市场与本地 MCP）；Node.js ≥ 18；零运行时依赖、离线可用；`style` 子命令需要本机 `python3` |
+| 权限与外部服务 | 只读写**目标仓库内**的文件；不联网、不收集数据；`plans --serve` 仅监听 `127.0.0.1`，并校验回环 Host、同源 Origin 与 JSON 写入请求（可选） |
 | 许可证 | CC0-1.0（公共领域奉献，见 [LICENSE](LICENSE)） |
-| 打包形态 | 根 `package.json` + `cordis.patch.yml`（`dsh.bundle.patch`），`main` 导出 `apply(ctx)`；安装后由 DSH 自动合入 profile |
+| 打包形态 | DSH：根 `package.json` + `cordis.patch.yml`（`dsh.bundle.patch`），`main` 导出 `apply(ctx)`；Codex：`.codex-plugin/plugin.json` + `.mcp.json` + `skills/` + `.agents/plugins/marketplace.json` |
+
+数据处理方式见 [PRIVACY.md](PRIVACY.md)，使用条款见 [TERMS.md](TERMS.md)。
 
 ### 真实输出（演示）
 
@@ -69,9 +92,14 @@ common-agent/                    ← 工作区里的项目目录
 │   ├── src/                     实现
 │   ├── templates/               生成物模板（文案唯一真源）
 │   ├── cordis.mjs               DSH 适配层：把子命令注册成工具与斜杠命令（导入 DSH 时用）
-│   ├── tests/                   108 个用例
+│   ├── codex-mcp.mjs            Codex 适配层：本地 stdio MCP，复用同一批工具规格
+│   ├── tests/                   196 个用例
 │   ├── vendor/agent-style-harness/  随包的 harness-style（Python，含离线依赖）
 │   └── package.json             name / bin / scripts
+├── .codex-plugin/plugin.json    Codex 插件清单
+├── .agents/plugins/marketplace.json  Codex Git 市场索引
+├── .mcp.json                    Codex 本地 MCP 服务注册
+├── skills/harness-cli/          Codex 技能与操作流程
 ├── harness-cli.json             插件自身的配置（AGENTS.md 由它生成）
 ├── AGENTS.md                    入口地图（生成物）
 ├── README.md                    本文件
@@ -84,7 +112,7 @@ common-agent/                    ← 工作区里的项目目录
 
 外壳只放文档与配置，不放可执行代码；`plugin/` 是自包含的——拷到别处仍可运行。
 
-装到 DSH 环境见 [`README-INSTALL.md`](README-INSTALL.md)（含手动步骤与卸载）。
+装到 DSH 或 Codex 环境见 [`README-INSTALL.md`](README-INSTALL.md)（含手动步骤与卸载）。
 
 ## 2. 它解决什么问题
 
@@ -107,15 +135,16 @@ common-agent/                    ← 工作区里的项目目录
 |---|---|---|
 | `init [--preset prototype] [--force] [--force-state] [--dry-run]` | 生成配置与骨架；已存在的非空文件默认不覆盖，状态文件即使 `--force` 也不覆盖 | 0 / 2 |
 | `agents [--stdout] [--force]` | 由 `harness-cli.json` 生成 `AGENTS.md`，并报行数（>100 警告，>120 失败） | 0 / 1 |
-| `page <任务名> [--user-words "原话"]` | 建任务页 + 四份规范文档 + 方案页 + 刷新总览（预设未开启会自动补；任务名支持中文） | 0 / 1 / 2 |
-| `review [任务名] [--agent <标识>]` | 复盘：跑项目判定，写 `docs/specs/<task>/review.md`（含四份文档指纹）；**省略任务名=自动选最近的任务** | 0 / 1 / 2 |
-| `plan [任务名] [--confirm --by "确认人"]` | 建任务时一次补全 `docs/specs` 四份文档 + 任务页 + 方案页；确认是可选步骤（确认前校验「复盘通过 + 文档指纹未变」）；省略任务名=最近的任务 | 0 / 1 / 2 |
+| `page <任务名> [--user-words "原话"]` | 建任务页 + 五份规范文档（含业务流程图）+ 方案页 + 刷新总览（预设未开启会自动补；任务名支持中文） | 0 / 1 / 2 |
+| `review [任务名] [--agent <标识>]` | 复盘：跑项目判定，写 `docs/specs/<task>/review.md`（含五份文档指纹，业务流程图改动也会让确认失效）；**省略任务名=自动选最近的任务** | 0 / 1 / 2 |
+| `plan [任务名] [--confirm --by "确认人"]` | 建任务时一次补全 `docs/specs` 五份文档 + 任务页 + 方案页；确认是可选步骤（确认前校验「复盘通过 + 文档指纹未变」）；省略任务名=最近的任务 | 0 / 1 / 2 |
 | `progress <任务名> [--step N --pct 0..100] [--status …] [--note …]` | 唯一进度写入口：改步骤 / 状态 → 追加记录 → 重算总进度 → 同步总览；**不要求先确认方案**（P21 由 check 在交付前拦） | 0 / 1 / 2 |
-| `ui [任务名] [--user-words "原话"] [--force]` | 生成 antd 风格 UI 设计稿、同步 `design.md`，并把「设计说明缺口」列成清单；斜杠命令会自动发起补全 | 0 / 1 / 2 |
-| `delete <任务名> [--yes]` | 删除任务的页面 / 设计稿 / 规范文档 / 复盘；默认只预演，`--yes` 才真删（DSH 侧会用弹窗确认） | 0 / 1 / 2 |
+| `ui [任务名] [--user-words "原话"] [--force]` | 生成 antd 风格 UI 设计稿、同步 `design.md`，并把「设计说明缺口」列成清单；同时追加一条任务进度记录并更新 `task_queue.json`；CLI 默认保留已有设计，`/harness-cli ui` 默认覆盖重写 | 0 / 1 / 2 |
+| `sql [任务名] [--dry-run]` | 数据库设计：补 `docs/specs/<task>/schema.sql` 与 `database.md`，按 Google 数模规范 lint，生成 `er.mmd`、单任务数模图 `prototype/<task>/db/index.html`（含关系说明 / 字段说明）与整体数模图 `prototype/db.html`；同时追加任务进度记录并更新 `task_queue.json`；`/harness-cli sql` 对已有 schema 也会覆盖执行并重新派发设计；省略任务名=最近的任务 | 0 / 1 / 2 |
+| `delete <任务名> [<任务名>...] [--yes]` | 批量删除任务页 / 设计稿 / 数据模型 / 规范文档 / 复盘；删除后同步 `progress.html`、`plans.html`、`db.html`、`db-layout.json` 与 `docs/wiki`；默认只预演，`--yes` 才真删（DSH 侧多选后直接删，进行中的任务先停止） | 0 / 1 / 2 |
 | `check [--strict] [--json]` | 只读校验；`--strict` 让警告也算失败 | 0 / 1 / 2 |
 | `doctor [--json]` | 工具自检：Node 版本、模板、配置、可写、是否 git 仓库、python3 | 0 / 2 |
-| `plans [serve [端口] \| stop]` | 根目录 `plans.html`：任务总览（`serve` 省略端口时用随机安全端口，启动后回显地址；指定端口被占用会强制接管；`stop` 停止）（**点任务名弹窗看 `progress.html`** / 展开编辑文档 / UI 弹窗预览 / 对话 / 删除 / 重跑）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
+| `plans [serve [端口] \| stop]` | 根目录 `plans.html`：任务总览（`serve` 省略端口时用随机安全端口，启动后回显地址；指定端口被占用会强制接管；`stop` 停止）（**点任务名弹窗看 `progress.html`** / 展开编辑五份文档与 `database.md` / `schema.sql` / 操作列「UI」「数模」弹窗预览 / 对话 / 删除 / 重跑 / 保存数模并刷新）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
 | `wiki [--update\|--keep\|--ask] [--check] [--dry-run]` | 生成 / 更新 `docs/wiki`（13 篇业务文档），并同步每个任务 `proposal.md` 的业务背景区块 | 0 / 1 / 2 |
 | `style <参数...>` | 把参数原样转给随包的 `harness-style`（代码风格 / 提交信息） | 透传 |
 
@@ -131,6 +160,13 @@ common-agent/                    ← 工作区里的项目目录
 推荐项的口径：**复盘通过 + 文档指纹未变 + 不破坏人工内容**；有风险时取保守项，
 并在进度记录里注明「自动 loop」。用户没回答前不开工。这条规则会写进生成的 `AGENTS.md`。
 
+`/harness-cli page` / `plan` 会把选择写进 `prototype/<task>/.harness-mode.json`：
+- **手动**：确认方案时仍弹窗点选；
+- **自动 loop**：确认方案时直接选择「确认」，确认人记为「自动 loop」，不再弹窗。
+
+进入工作流后先读 `claude-progress.md`，恢复上次进度；有未完成任务时先继续完成，
+不要从零重做或另起无关任务。没有未完成任务时，才从功能清单领取新工作。
+
 ## 4. 生成物
 
 ```
@@ -139,11 +175,18 @@ init.sh                      环境初始化（幂等、set -euo pipefail、失�
 scripts/gate.sh              门禁（lint → 测试 → WIP 上限 + 认领一致性）
 scripts/claim.js             并行 loop 的认领工具（add / release / heartbeat / list / verify / prune）
 docs/specs/README.md         规范文档约定（每个任务四份：proposal / spec / design / tasks）
+docs/specs/<task>/flow.md    业务流程图（先规划并确认，再做设计与文档）
+docs/specs/<task>/schema.sql 数据库 DDL（sql 子命令生成骨架，唯一真源）
+docs/specs/<task>/database.md 数据模型设计（Google 数模规范）
+docs/specs/<task>/er.mmd     Mermaid ER 图（自动生成）
+prototype/<task>/db/index.html 单任务数模图（关系说明 + 字段说明，自动生成）
+prototype/db.html             整体数模图（全部任务合并，可拖动调整布局）
+prototype/db-layout.json      整体数模图的手动布局（plans 保存时写入）
 docs/wiki/*.md                业务文档（由 wiki 子命令生成，13 篇；业务域下钻页在 dirs 声明 name 时才有）
 docs/claims/README.md        认领协议（人读的约定；每个 loop 的认领落在 docs/claims/<F-xxx>.json）
 docs/feature_list.json       功能清单（acceptance / evidence / depends_on / WIP 上限内并行）
 claude-progress.md           进度日志（六节，含「下一步行动」）
-task_queue.json              任务队列（wipLimit）
+task_queue.json              任务队列（wipLimit + 任务条目：ui/sql 产物、状态、进度）
 docs/current.md              任务日志（顶部追加）
 docs/summary.json            当前任务与下一步
 docs/graph.json              模块依赖
@@ -249,13 +292,13 @@ node scripts/prototype-check.js --prune --dry-run
 ```
 
 新建页是**骨架**（留着「待填」），填完 DDD / SDD / TDD 与文档后 `check` 才通过——这是故意的。
-任务一开始跑 `plan <task>`：一次补全 `docs/specs/<task>/` 四份文档（提案 / 契约 / 设计 / 规划）、
+任务一开始先写 `docs/specs/<task>/flow.md` 的业务流程图并在方案页确认；再跑 `plan <task>` 补全 `docs/specs/<task>/` 五份文档（业务流程图 / 提案 / 契约 / 设计 / 规划）、
 任务页的领域·契约·用例·规划区块，以及 `prototype/<task>/plan.html`（目标 / 方案 / 页面设计 / 流程交互 / 风险 / 验收）。
 内容可以用参数覆盖：`--goal`、`--scope`、`--context`、`--term "术语=定义"`、`--contract "S-01|标题|输入|输出|错误|验收"`
 `--step "步骤|S-01"`，或整包 `--input-json '<json>'`。**人可以直接改这些文档**；再跑 `plan` 时已填好的文档默认不覆盖
 （`--force` 才重写）。改完：
 
-1. `review <task>` —— Agent 复盘：跑项目判定（文档与页面一致性），写 `review.md`（含四份文档的指纹）；
+1. `review <task>` —— Agent 复盘：跑项目判定（文档与页面一致性），写 `review.md`（含五份文档的指纹）；
 2. `plan <task> --confirm --by "确认人"` —— 确认方案（**可选**）：核对复盘指纹后，把方案标为「已确认」；
    走 DSH 工具 / 斜杠命令时，确认这一步会**弹窗让你点选**，选「取消」就保持未确认；
 3. `plan` 生成成功后**自动开工**：把任务推入执行，并在当前对话发起一个执行回合（按 `tasks.md` 的 Step 1..N 开工，
@@ -267,7 +310,34 @@ node scripts/prototype-check.js --prune --dry-run
    `progress` 会先写任务页、再重算 `prototype/progress.html`；同步脚本缺失时自动按模板补回，
    补不回来就报一行可执行的修法（跑 `init`），不会再只更新任务页而让总览停在旧数据。
 需要界面时先跑 `ui <task>`：生成 `prototype/<task>/ui/index.html`（antd v5 令牌 + 布局 + 表格 + 表单 + 状态）
-与设计说明；默认不覆盖人工修改，`--force` 才重写。所有 UI 统一 antd，P20 会拦第二套设计体系。
+与设计说明；CLI 默认不覆盖人工修改，`--force` 才重写；`/harness-cli ui` 默认覆盖重写。所有 UI 统一 antd，P20 会拦第二套设计体系。
+
+数据建模跑 `/harness-cli sql`：多选任务后补 `docs/specs/<task>/schema.sql` 与 `database.md`，
+按 Google 数模规范（snake_case、主键、外键索引、3NF、numeric 金额、timestamptz、审计时间）做 lint，
+并自动把 `schema.sql` 渲染成 `docs/specs/<task>/er.mmd`、单任务数模图 `prototype/<task>/db/index.html`
+与整体数模图 `prototype/db.html`。单任务图会列出「关系说明」（来源字段 → 目标字段、基数、范围、业务含义）
+和「字段说明」；字段说明来自 `COMMENT ON TABLE/COLUMN` 或行尾 `-- 说明`，缺说明会给 DB014/DB015 警告。
+关系 / 字段说明还会**反填**进 `database.md` 的受管区块（`<!-- harness-db:begin -->`）；字段名 / 类型 / 约束 / 说明完全相同的行会合并，所属表列在同一行；引用其他任务的表会标成
+「外部表，见整体数模图」。整体图里也直接展示每个任务的 `schema.sql` 源码与跨任务关系说明。
+整体图支持拖动实体、缩放平移，布局保存在 `prototype/db-layout.json`（`plans serve` 下保存）
+或浏览器 localStorage；`plans.html` 里可直接预览整体图与单任务图，并能编辑 / 预览 `database.md`、`schema.sql`。
+`ui` / `sql` 生成产物后会往任务页 `progress.html` 追加一条活动记录（**不改步骤百分比**，不伪造进度），
+同时把任务状态 / 总进度 / 产物写进 `task_queue.json` 的 `items`；后续 `progress` 会同步队列里的状态与进度，
+任务页头部有「方案预览」按钮，点击弹窗加载同任务的 `plan.html`；方案页里的业务流程图源文件链接也可点击，弹窗渲染 `flow.md`（Mermaid 源码按 Markdown 预览，`file://` 下无法 fetch 时回退为新窗口打开）。
+
+`delete` 会把队列条目一并删除，并同步重生成 `prototype/progress.html`、`plans.html`、`prototype/db.html`、
+清理 `prototype/db-layout.json` 里已删除表的坐标，再跑一次 `wiki --update` 更新 `docs/wiki`。
+
+所有生成的 HTML（`plans.html`、`progress.html`、`plan.html`、`ui/index.html`、`db/index.html`、`prototype/db.html`）
+都带骨架屏：先显示占位块，页面/布局/iframe 数据就绪后再淡出显示真实内容。
+schema 还是空的或有 lint 错误时命令退出 1，Agent 按提示补完后重跑即可。
+
+任务中断后不用从零重来：`/harness-cli continue` 会列出「进行中 / 待验收」的任务，选中后把
+「从当前进度继续、不重做已完成步骤」的执行说明发到当前对话；也可以直接
+`/harness-cli continue <任务名>` 跳过选择。
+要整体重来用 `/harness-cli restart`：弹窗多选任务后，把进度归零、方案回到「待确认」、复盘作废
+（`docs/specs` 与 UI 设计稿保留），再派发 Agent 重新复盘 / 确认方案 / 从 Step 1 执行；
+也可以写 `/harness-cli restart <任务名> [任务名...]` 跳过弹窗。
 
 任务名支持中文（如 `登录页面`）与英文 kebab-case（如 `login-flow`）；目标目录不存在时会自动创建，
 所以「任务第一次跑」不会因为目录缺失而失败。
@@ -332,7 +402,7 @@ node plugin/bin/dsh-plugin-harness-cli.js wiki --check    # 只报告：缺失 /
 
 DSH 侧对应工具 `harness_cli_wiki` 与斜杠命令 `/harness-cli wiki`：模型先以默认模式跑，遇到退出码 1
 （待接管或冲突）就询问用户，再带 `auto` 或 `keep` 重跑。生成后若还有「仍需人工确认」的缺口，
-命令会通过 `agent.followup` **在当前对话自动发起一条「反推补全」消息**（带缺口清单路径与步骤），
+命令会通过 `agent.steer` **把「反推补全」消息直接发送到当前对话**（带缺口清单路径与步骤），
 Agent 用业务白话补完并重跑直到 0 缺口；`--check` 不会发起。
 
 ## 10. 随包的 harness-style（`style` 子命令）
@@ -366,10 +436,27 @@ node plugin/bin/dsh-plugin-harness-cli.js style check --staged \
 前提：`style` 需要目标机器有 `python3`（harness-style 是 Python 实现）。
 没有 `python3` 时 `doctor` 会给出警告，其余子命令不受影响。
 
-## 11. 导入 DSH 当工具用（`cordis.mjs`）
+## 11. 导入 DSH / Codex 当工具用
 
-CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插件。适配层是 `plugin/cordis.mjs`
+CLI 是给人敲的；要让**模型自己**调用，就把它注册成宿主插件。DSH 适配层是 `plugin/cordis.mjs`
 （零依赖，只起子进程），判定与文案仍在 `src/` 与 `templates/`，所以工具行为和命令行逐字一致。
+
+### Codex（本地 MCP）
+
+`.codex-plugin/plugin.json` 声明技能目录与 `.mcp.json`；`.mcp.json` 用
+`node ./plugin/codex-mcp.mjs` 启动本地 stdio 服务。服务直接复用 `cordis.mjs` 的
+`TOOL_SPECS` 与 `runCli`，因此 Codex 仍看到同样的 13 个工具名。
+
+Codex 启动 MCP 时的工作目录属于插件安装缓存，不是用户仓库，所以 Codex 工具要求每次显式传
+目标仓库的绝对 `root`；缺少或传入相对路径会直接报错，不会误写插件目录。
+
+```sh
+codex plugin marketplace add gouqingping/dsh-plugin-harness-cli
+codex plugin add dsh-plugin-harness-cli@dsh-plugin-harness-cli
+codex mcp list
+```
+
+### DSH（Cordis）
 
 注册：在 `~/.dsh/profiles/<profile>/cordis.patch.yml` 追加入口，然后重启 DSH。
 
@@ -387,12 +474,13 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 |---|---|---|---|
 | `harness_cli_check` | `check` | 否（门禁） | 0 / 1 / 2 |
 | `harness_cli_init` | `init` | 是（`dry_run` 可只预览） | 0 / 2 |
-| `harness_cli_page` | `page <task>` | 是（页面 + `docs/specs/` 四份文档 + 方案页 + 总览） | 0 / 1 / 2 |
+| `harness_cli_page` | `page <task>` | 是（页面 + `docs/specs/` 五份文档 + 方案页 + 总览） | 0 / 1 / 2 |
 | `harness_cli_review` | `review <task>` | 是（`docs/specs/<task>/review.md`） | 0 / 1 / 2 |
 | `harness_cli_plan` | `plan <task> [--confirm]` | 是（`plan.html` + `review.md` 状态） | 0 / 1 / 2 |
 | `harness_cli_progress` | `progress <task>` | 是（步骤 / 状态 / 记录 / 总览） | 0 / 1 / 2 |
 | `harness_cli_ui` | `ui <task>` | 是（`prototype/<task>/ui/`） | 0 / 1 / 2 |
-| `harness_cli_delete` | `delete <task>` | 是（删任务页 / 设计稿 / 规范文档 / 复盘） | 0 / 1 / 2 |
+| `harness_cli_sql` | `sql <task>` | 是（`schema.sql` / `database.md` / `er.mmd` / `db/index.html`） | 0 / 1 / 2 |
+| `harness_cli_delete` | `delete <task>` | 是（删任务页 / 设计稿 / 数据模型 / 规范文档 / 复盘） | 0 / 1 / 2 |
 | `harness_cli_wiki` | `wiki` | 是（`docs/wiki` 受管区块） | 0 / 1（冲突需决策）/ 2 |
 | `harness_cli_agents` | `agents` | 是（`dry_run` / `force`） | 0 / 1 |
 | `harness_cli_doctor` | `doctor` | 否（工具自检） | 0 / 2 |
@@ -405,26 +493,44 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 
 需要用户拍板的操作一律**弹窗点选**，不靠打印提示让人自己跑命令：wiki 冲突（接管 / 只补缺失 / 取消）、
 删除任务（删除 / 取消）、`--force` 覆盖已有文件（覆盖 / 取消）、方案确认（确认 / 取消）都走这条路径；
-弹窗来自宿主的 `userQuestions` 服务，没有可用 UI 时退化为非交互行为（删除则直接拒绝，要求 `--yes`）。
+弹窗来自宿主的 `userQuestions` 服务。每次点选或输入后，结果会立即作为一条 `user/message`
+反馈到当前对话（例如 `已选择：生成 UI 设计稿`、`已输入：登录页面`），但不会唤醒额外的模型回合；
+没有可用 UI 时退化为非交互行为（删除则直接拒绝，要求 `--yes`）。
 
 输入框工具栏上还有一个**准星 + 指令**按钮（Web 客户端半边 `plugin/client.js`）：点开在按钮正上方弹出菜单，
-列出 13 条中文子指令，选中即执行；需要任务名的只填入、等你补上任务名再回车。
+列出 16 条中文子指令；选中后只填入输入框，和 `/` 菜单一样按 Enter 才执行；需要任务名的会留一个空格，补完后回车。
+
+客户端还会把宿主写死的两个占位文案做兼容覆盖：问题卡片的自定义输入「输入你的答案」→「请输入」，
+会话输入框 →「请输入自定义语义」，`/harness-cli` 的命令输入提示也改为「请输入自定义语义」。
+这是运行时补丁；宿主的 `locale` 服务被冻结时保持原样，其他文案不受影响。
+菜单支持键盘操作：`↑/↓` 循环选择，`Home/End` 跳到首尾，`Enter/空格` 执行当前项，`Esc` 关闭并回到指令按钮。
 菜单 portal 到 `document.body` 并用按钮矩形定位（输入框是 fixed 容器，不 portal 会被裁掉），
 颜色只用主题令牌，深浅色自动跟随。客户端半边由页面在启动时加载，装好后需要刷新页面。
 
 以及**一条**聚合斜杠命令：`/harness-cli [子指令] [参数...]`。
-不带子指令时弹窗让你选（初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 推进度 / UI 设计 / 删除任务 / 业务 wiki / 任务总览 / 入口地图 / 帮助），
+不带子指令时弹窗让你选（初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 推进度 / 继续任务 / 重跑任务 / UI 设计 / 数据库设计 / 删除任务 / 业务 wiki / 任务总览 / 入口地图 / 帮助），
 选中后执行对应动作；也可以直接写子指令，例如 `/harness-cli check`、`/harness-cli plan 登录页面 --confirm`。
+
+| 子指令 | 作用 | 交互 |
+|---|---|---|
+| `/harness-cli continue [任务名]` | 继续未完成任务：只列「进行中 / 待验收」，选中后派发「从当前进度继续、不重做已完成步骤」 | 单选弹窗；显式任务名跳过弹窗 |
+| `/harness-cli restart [任务名...]` | 重跑任务：进度归零、方案回到待确认、复盘作废（文档与 UI 设计稿保留），再派发「从 Step 1 重新开始」 | 多选弹窗；显式任务名跳过弹窗 |
+| `/harness-cli sql [任务名...]` | 数据库设计：多选任务后按 Google 数模规范生成 `schema.sql` / `database.md`，并派发 Agent 补齐设计、跑 lint、生成 ER 数模图 | 多选弹窗；显式任务名跳过弹窗 |
+| `/harness-cli delete [任务名...]` | 删除任务：多选后删除任务页 / 方案 / UI / 数据模型 / 规范文档 / 复盘；进行中的任务先发停止指令再删 | 多选弹窗（不可恢复）；显式任务名保留一次确认 |
+
 从菜单选「任务总览」会自动带上 `serve`，并弹一个**非必填**的端口输入框：跳过=随机端口，填数字=固定端口。
-`page` / `plan` 完成后还会问一句「要不要同时生成 UI 设计稿」，选「是」就在同一条命令里接着跑 `ui`；
+`page` / `plan` 采用两阶段执行：先完成任务名与设计选择（先问「要不要创建数模设计」，再问
+「要不要生成 UI 设计稿」），再开始执行；选择数模 / UI 时在同一次处理里依次执行 `page/plan`、`sql`、`ui`。
+`plan` 的自动开工也会等到 `sql` / `ui` 完成后才发起；
 所有从菜单发起的指令，结果开头都会写 `已执行 /harness-cli <子指令>`，在对话里可追溯。
 任务名后面的说明会自动进 `--user-words`（`/harness-cli plan 登录页面 添加最小6位最大8位的限制`）；
 如果整句都被当成了任务名（含标点/空格），会弹窗要一个短名字，原句仍作为需求写进文档。
-宿主没有指令分组能力，所以 12 条独立指令会塞满菜单——这里统一收成一条入口，子指令行为与原来逐条注册时完全一致。
+宿主没有指令分组能力，所以十几条独立指令会塞满菜单——这里统一收成一条入口，子指令行为与原来逐条注册时完全一致。
 
 在 `/` 菜单里选中指令只是把它填进输入框，**要按 Enter 才执行**（输入框的宿主逻辑，插件改不了）。
 回车后命令处理器直接向宿主的问答服务发起一次单请求，选择卡片出现在输入框上方；选中即执行对应子指令，
-不经过模型，也不会把任何提示文字漏进对话。如果没有可用的问答界面，会返回一行原因并附上子指令写法。
+不经过模型；选择结果会立即作为对话消息反馈，主命令仍要等选择完成后才开始。
+如果没有可用的问答界面，会返回一行原因并附上子指令写法。
 
 两个宿主细节写在 `cordis.mjs` 顶部：DSH 桌面端是 Electron，所以子进程要带
 `ELECTRON_RUN_AS_NODE=1` 才会被当成 node 执行；目标仓库用子进程的 `cwd` 指定而不是 `--root`，
@@ -436,7 +542,7 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成 DSH 插�
 ## 12. 开发
 
 ```sh
-node --test                                  # 108 个用例
+node --test                                  # 197 个用例
 node plugin/bin/dsh-plugin-harness-cli.js doctor       # 自检（Node / 模板 / 配置 / 可写）
 ```
 

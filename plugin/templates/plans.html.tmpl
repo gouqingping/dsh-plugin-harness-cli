@@ -52,11 +52,31 @@
   .doc textarea { width:100%; min-height:120px; padding:8px 10px; border:1px solid var(--ant-color-border);
                   border-radius:var(--ant-border-radius); font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; background:#fff; }
   .doc-actions { display:flex; justify-content:flex-end; align-items:center; gap:8px; margin-top:12px; }
+  .db-editor { margin-top:12px; border:1px solid var(--ant-color-border); border-radius:var(--ant-border-radius-lg);
+               background:#fff; padding:8px 12px; }
+  .db-editor summary { cursor:pointer; font-weight:600; }
+  .db-actions { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 4px; }
+  .db-docs { margin-top:8px; }
+  .doc-preview { flex:1; overflow:auto; padding:20px 24px; font-size:14px; line-height:1.7; }
+  .doc-preview h1, .doc-preview h2, .doc-preview h3, .doc-preview h4 { margin:16px 0 8px; line-height:1.35; }
+  .doc-preview h1 { font-size:22px; } .doc-preview h2 { font-size:18px; } .doc-preview h3 { font-size:16px; }
+  .doc-preview p { margin:8px 0; }
+  .doc-preview ul, .doc-preview ol { margin:8px 0; padding-left:22px; }
+  .doc-preview pre { background:#f6f8fa; border:1px solid var(--ant-color-border-secondary); border-radius:8px;
+                     padding:12px 14px; overflow:auto; font-size:12px; line-height:1.5; }
+  .doc-preview code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+  .doc-preview table { border-collapse:collapse; margin:10px 0; font-size:13px; }
+  .doc-preview th, .doc-preview td { border:1px solid var(--ant-color-border-secondary); padding:6px 10px; text-align:left; vertical-align:top; }
+  .doc-preview th { background:#fafafa; }
   .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:50; }
   .modal-mask.is-open { display:flex; }
   .modal { width:min(1100px,92vw); height:min(720px,86vh); background:#fff; border-radius:var(--ant-border-radius-lg); display:flex; flex-direction:column; overflow:hidden; }
   .modal-head { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--ant-color-border-secondary); }
-  .modal iframe { flex:1; border:0; width:100%; background:#fff; }
+  .modal-body { flex:1; position:relative; display:flex; min-height:0; }
+  .modal-body iframe { flex:1; border:0; width:100%; background:#fff; position:relative; z-index:1; }
+  .preview-skeleton { position:absolute; inset:0; z-index:2; background:#fff; padding:20px;
+                      transition:opacity .15s ease; }
+  .preview-skeleton.is-hidden { opacity:0; visibility:hidden; pointer-events:none; }
   .empty { padding:40px 16px; text-align:center; color:var(--ant-color-text-tertiary); }
   #toast { position:fixed; left:50%; bottom:32px; transform:translateX(-50%); background:rgba(0,0,0,.82); color:#fff;
            padding:10px 16px; border-radius:var(--ant-border-radius-lg); font-size:13px; opacity:0; pointer-events:none;
@@ -78,19 +98,20 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
       <span class="tag tag-default" id="live-state">静态快照</span>
+      {{#if dbPage}}<button class="btn" id="db-overview" title="整体数模设计图（可拖动调整布局）">整体数模图</button>{{/if}}
       <button class="btn" id="reload">刷新</button>
     </div>
   </header>
 
   <div class="offline" id="offline-tip" style="display:none">
-    当前以文件方式打开（<code>file://</code>）：删除 / 重跑 / 保存会先复制命令，UI 预览改为新窗口打开。
+    当前以文件方式打开（<code>file://</code>）：删除 / 重跑 / 保存会先复制命令；UI / 数模仍可在弹窗里预览。
     让按钮直接落盘：在项目里运行 <code>dsh-plugin-harness-cli plans --serve</code>，再访问 <code>http://127.0.0.1:7788/</code>。
   </div>
 
   <div class="card">
     <table>
       <thead>
-        <tr><th>任务（点击看详细进度）</th><th>状态</th><th>总进度</th><th>UI</th><th>最近更新</th><th style="text-align:right">操作</th></tr>
+        <tr><th>任务（点击看详细进度）</th><th>状态</th><th>总进度</th><th>最近更新</th><th style="text-align:right">操作</th></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -103,13 +124,22 @@
 <div class="modal-mask" id="modal">
   <div class="modal">
     <div class="modal-head">
-      <b id="modal-title">UI 预览</b>
+      <b id="modal-title">预览</b>
       <div style="display:flex;gap:8px;align-items:center">
         <a id="modal-open" href="#" target="_blank" rel="noopener">新窗口打开</a>
+        <button class="btn btn-sm" id="modal-refresh">刷新</button>
         <button class="btn btn-sm" id="modal-close">关闭</button>
       </div>
     </div>
-    <iframe id="modal-frame" title="UI 预览"></iframe>
+    <div class="modal-body">
+      <div class="preview-skeleton" id="preview-skeleton" aria-hidden="true">
+        <div class="hcli-sk" style="width:220px;height:24px"></div>
+        <div class="hcli-sk" style="width:100%;height:56px"></div>
+        <div class="hcli-sk" style="width:100%;height:220px"></div>
+        <div class="hcli-sk" style="width:60%;height:18px"></div>
+      </div>
+      <iframe id="modal-frame" title="预览"></iframe>
+    </div>
   </div>
 </div>
 
@@ -124,7 +154,28 @@
         <button class="btn btn-sm" id="progress-close">关闭</button>
       </div>
     </div>
-    <iframe id="progress-frame" title="任务详细进度"></iframe>
+    <div class="modal-body">
+      <div class="preview-skeleton" id="progress-skeleton" aria-hidden="true">
+        <div class="hcli-sk" style="width:220px;height:24px"></div>
+        <div class="hcli-sk" style="width:100%;height:56px"></div>
+        <div class="hcli-sk" style="width:100%;height:220px"></div>
+        <div class="hcli-sk" style="width:60%;height:18px"></div>
+      </div>
+      <iframe id="progress-frame" title="任务详细进度"></iframe>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="doc-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <b id="doc-modal-title">文档预览</b>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="hint">database.md 直接渲染；schema.sql 显示源码</span>
+        <button class="btn btn-sm" id="doc-modal-close">关闭</button>
+      </div>
+    </div>
+    <div class="doc-preview" id="doc-modal-body"></div>
   </div>
 </div>
 
@@ -237,7 +288,7 @@
   }
 
   function taskSignature(task) {
-    return [task.name, task.total, task.status, task.updated, task.hasUi].join('|');
+    return [task.name, task.total, task.status, task.updated, task.hasUi, task.hasDb].join('|');
   }
 
   function rowForName(name) {
@@ -263,18 +314,19 @@
       }
     }
     var changed = [];
-    var uiChanged = false;
+    var assetChanged = false;
     if (sameNames) {
       next.forEach(function (task, index) {
         var prev = TASKS[index];
         if (taskSignature(prev) === taskSignature(task)) return;
         changed.push(task.name);
-        if (Boolean(prev.hasUi) !== Boolean(task.hasUi)) uiChanged = true;
+        if (Boolean(prev.hasUi) !== Boolean(task.hasUi)) assetChanged = true;
+        if (Boolean(prev.hasDb) !== Boolean(task.hasDb)) assetChanged = true;
       });
     }
     TASKS = next;
     document.getElementById('task-count').textContent = String(TASKS.length);
-    if (!sameNames || uiChanged) {
+    if (!sameNames || assetChanged) {
       render();
       return;
     }
@@ -284,7 +336,7 @@
       if (!task || !row) return;
       row.children[1].innerHTML = '<span class="tag ' + tagClass(task.status) + '">' + esc(task.status || '进行中') + '</span>';
       row.children[2].innerHTML = progressCell(task.total);
-      row.children[4].textContent = task.updated || '—';
+      row.children[3].textContent = task.updated || '—';
     });
     if (currentProgress && changed.indexOf(currentProgress) !== -1) {
       clearTimeout(liveReloadTimer);
@@ -300,18 +352,19 @@
       '<td><button type="button" class="task-link" data-progress="' + index + '" title="查看当前任务详细进度（progress.html）">' + esc(task.name) + '</button></td>' +
       '<td><span class="tag ' + tagClass(task.status) + '">' + esc(task.status || '进行中') + '</span></td>' +
       '<td><span class="progress"><span class="progress-track"><span class="progress-fill" style="width:' + (task.total || 0) + '%"></span></span><span>' + (task.total || 0) + '%</span></span></td>' +
-      '<td>' + (task.hasUi ? '<a href="#" data-ui="' + index + '">预览</a>' : '—') + '</td>' +
       '<td>' + esc(task.updated || '—') + '</td>' +
       '<td style="text-align:right;white-space:nowrap">' +
         '<button class="btn btn-sm" data-expand="' + index + '">展开</button> ' +
         '<button class="btn btn-sm" data-chat="' + index + '">对话</button> ' +
-        (task.hasUi ? '<button class="btn btn-sm" data-ui="' + index + '">UI 预览</button> ' : '') +
+        (task.hasUi ? '<button class="btn btn-sm" data-ui="' + index + '">UI</button> ' : '') +
+        (task.hasDb ? '<button class="btn btn-sm" data-db="' + index + '">数模</button> ' : '') +
         '<button class="btn btn-sm" data-rerun="' + index + '">重跑</button> ' +
         '<button class="btn btn-sm btn-danger" data-delete="' + index + '">删除</button>' +
       '</td>' +
     '</tr>' +
-    '<tr class="detail-row" id="detail-' + index + '" style="display:none"><td colspan="6">' +
+    '<tr class="detail-row" id="detail-' + index + '" style="display:none"><td colspan="5">' +
       '<div class="docs">' + docFields(task, index) + '</div>' +
+      dbEditor(task, index) +
       '<div class="doc-actions">' +
         '<span class="hint">保存后任务从 0 重启（方案回到「待确认」），并复制启动提示词</span>' +
         '<button class="btn" data-collapse="' + index + '">收起</button>' +
@@ -320,9 +373,28 @@
     '</td></tr>';
   }
 
+  function dbEditor(task, index) {
+    var docs = task.docs || {};
+    return '<details class="db-editor"' + (task.hasDb ? ' open' : '') + '>' +
+      '<summary>数模设计（database.md / schema.sql）</summary>' +
+      '<div class="db-actions">' +
+        (task.hasDb ? '<button class="btn btn-sm" data-db="' + index + '">预览数模图</button> ' : '') +
+        '<button class="btn btn-sm" data-preview-doc="database" data-index="' + index + '">预览 database.md</button> ' +
+        '<button class="btn btn-sm" data-preview-doc="schema" data-index="' + index + '">预览 schema.sql</button> ' +
+        '<button class="btn btn-sm btn-primary" data-save-db="' + index + '">保存数模并刷新</button>' +
+      '</div>' +
+      '<div class="docs db-docs">' +
+        '<div class="doc"><label>database.md（数据模型设计）</label>' +
+          '<textarea id="db-doc-' + index + '" spellcheck="false">' + esc(docs.database || '') + '</textarea></div>' +
+        '<div class="doc"><label>schema.sql（DDL，唯一真源）</label>' +
+          '<textarea id="db-schema-' + index + '" spellcheck="false">' + esc(docs.schema || '') + '</textarea></div>' +
+      '</div>' +
+    '</details>';
+  }
+
   function docFields(task, index) {
     var docs = task.docs || {};
-    var order = [['proposal', '提案 proposal.md'], ['spec', '契约 spec.md'], ['design', '设计 design.md'], ['tasks', '规划 tasks.md']];
+    var order = [['flow', '业务流程图 flow.md'], ['proposal', '提案 proposal.md'], ['spec', '契约 spec.md'], ['design', '设计 design.md'], ['tasks', '规划 tasks.md']];
     return order.map(function (item) {
       return '<div class="doc"><label>' + item[1] + '</label>' +
         '<textarea id="doc-' + index + '-' + item[0] + '" spellcheck="false">' + esc(docs[item[0]] || '') + '</textarea></div>';
@@ -352,6 +424,17 @@
     if (button) button.textContent = open ? '收起' : '展开';
   }
 
+  function showSkeleton(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.remove('is-hidden');
+    // iframe 可能因为同 URL 不触发 load：兜底 2.5s 后隐藏，避免骨架屏卡住。
+    setTimeout(function () { hideSkeleton(id); }, 2500);
+  }
+  function hideSkeleton(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.add('is-hidden');
+  }
+
   function preview(index) {
     var task = taskOf(index);
     if (!task || !task.hasUi) return;
@@ -359,15 +442,169 @@
     var url = ONLINE ? '/' + relative : relative;
     document.getElementById('modal-title').textContent = task.name + ' · UI 设计稿';
     document.getElementById('modal-open').href = url;
+    showSkeleton('preview-skeleton');
     document.getElementById('modal-frame').src = url;
     document.getElementById('modal').classList.add('is-open');
   }
 
-  function openPreviewWindow(index) {
+  /** 单任务数模图：复用同一个弹窗。 */
+  function previewDb(index) {
+    var task = taskOf(index);
+    if (!task || !task.hasDb) return;
+    var relative = 'prototype/' + encodeURIComponent(task.name) + '/db/index.html';
+    var url = ONLINE ? '/' + relative : relative;
+    document.getElementById('modal-title').textContent = task.name + ' · 数模图';
+    document.getElementById('modal-open').href = url;
+    showSkeleton('preview-skeleton');
+    document.getElementById('modal-frame').src = url;
+    document.getElementById('modal').classList.add('is-open');
+  }
+
+  /** 整体数模图：所有任务合并后的可拖拽预览页。 */
+  function previewDbOverview() {
+    if (!DATA.dbPage) return;
+    var url = ONLINE ? '/' + DATA.dbPage : DATA.dbPage;
+    document.getElementById('modal-title').textContent = '整体数模设计图';
+    document.getElementById('modal-open').href = url;
+    showSkeleton('preview-skeleton');
+    document.getElementById('modal-frame').src = url;
+    document.getElementById('modal').classList.add('is-open');
+  }
+
+  /** database.md 的轻量 Markdown 渲染（零依赖；先转义再加标签）。 */
+  function renderMarkdown(markdown) {
+    function inline(text) {
+      var out = esc(text);
+      out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+      out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      out = out.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      return out;
+    }
+    function cells(line) {
+      return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (cell) { return cell.trim(); });
+    }
+    var lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+    var html = [];
+    var code = null;
+    var list = null;
+    var table = [];
+    var separator = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+
+    function flushList() {
+      if (list) { html.push('</' + list + '>'); list = null; }
+    }
+    function flushTable() {
+      if (table.length === 0) return;
+      var rows = table.slice();
+      table = [];
+      if (rows.length < 2) {
+        html.push('<p>' + inline(rows[0]) + '</p>');
+        return;
+      }
+      var head = cells(rows[0]);
+      html.push('<table><thead><tr>');
+      head.forEach(function (cell) { html.push('<th>' + inline(cell) + '</th>'); });
+      html.push('</tr></thead><tbody>');
+      for (var index = 1; index < rows.length; index += 1) {
+        if (separator.test(rows[index])) continue;
+        html.push('<tr>');
+        cells(rows[index]).forEach(function (cell) { html.push('<td>' + inline(cell) + '</td>'); });
+        html.push('</tr>');
+      }
+      html.push('</tbody></table>');
+    }
+    function flushAll() { flushList(); flushTable(); }
+
+    for (var i = 0; i < lines.length; i += 1) {
+      var line = lines[i];
+      if (/^```/.test(line.trim())) {
+        if (code === null) { flushAll(); code = []; }
+        else { html.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>'); code = null; }
+        continue;
+      }
+      if (code !== null) { code.push(line); continue; }
+      if (/^\s*$/.test(line)) { flushAll(); continue; }
+      var heading = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (heading) {
+        flushAll();
+        var level = heading[1].length;
+        html.push('<h' + level + '>' + inline(heading[2]) + '</h' + level + '>');
+        continue;
+      }
+      if (/^\s*>\s?/.test(line)) {
+        flushAll();
+        html.push('<blockquote>' + inline(line.replace(/^\s*>\s?/, '')) + '</blockquote>');
+        continue;
+      }
+      if (/^\s*[-*+]\s+/.test(line)) {
+        flushTable();
+        if (list !== 'ul') { flushList(); html.push('<ul>'); list = 'ul'; }
+        html.push('<li>' + inline(line.replace(/^\s*[-*+]\s+/, '')) + '</li>');
+        continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {
+        flushTable();
+        if (list !== 'ol') { flushList(); html.push('<ol>'); list = 'ol'; }
+        html.push('<li>' + inline(line.replace(/^\s*\d+\.\s+/, '')) + '</li>');
+        continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(line)) {
+        flushList();
+        table.push(line);
+        continue;
+      }
+      flushAll();
+      html.push('<p>' + inline(line) + '</p>');
+    }
+    if (code !== null) html.push('<pre><code>' + esc(code.join('\n')) + '</code></pre>');
+    flushAll();
+    return html.join('\n');
+  }
+
+  function openDocPreview(index, kind) {
     var task = taskOf(index);
     if (!task) return;
-    window.open('prototype/' + encodeURIComponent(task.name) + '/ui/index.html', '_blank', 'noopener');
-    toast('已在新窗口打开设计稿');
+    var field = (kind === 'database' ? 'db-doc-' : 'db-schema-') + index;
+    var area = document.getElementById(field);
+    var text = area ? area.value : ((task.docs || {})[kind] || '');
+    var title = kind === 'database' ? 'database.md' : 'schema.sql';
+    document.getElementById('doc-modal-title').textContent = task.name + ' · ' + title;
+    document.getElementById('doc-modal-body').innerHTML = text.trim().length === 0
+      ? '<p class="hint">文件还是空的：在「数模设计」里补全后点「保存数模并刷新」。</p>'
+      : kind === 'database'
+        ? renderMarkdown(text)
+        : '<pre><code>' + esc(text) + '</code></pre>';
+    document.getElementById('doc-modal').classList.add('is-open');
+  }
+
+  function closeDocPreview() {
+    document.getElementById('doc-modal').classList.remove('is-open');
+    document.getElementById('doc-modal-body').innerHTML = '';
+  }
+
+  function saveDb(index) {
+    var task = taskOf(index);
+    if (!task) return;
+    var docArea = document.getElementById('db-doc-' + index);
+    var schemaArea = document.getElementById('db-schema-' + index);
+    var docs = {
+      database: docArea ? docArea.value : '',
+      schema: schemaArea ? schemaArea.value : ''
+    };
+    if (!ONLINE) {
+      toast('文件打开模式无法写盘：请用 plans --serve 打开，或把内容粘贴回 docs/specs/ 文件', 5000);
+      return;
+    }
+    post('save-db', {task: task.name, docs: docs})
+      .then(function (res) {
+        var sql = res && res.sql;
+        if (sql && sql.status !== 0) {
+          finish('已保存；数模检查未通过（退出码 ' + sql.status + '），打开数模图查看问题');
+        } else {
+          finish('已保存数模并刷新图');
+        }
+      })
+      .catch(function (err) { toast('保存数模失败：' + err.message, 5000); });
   }
 
   /** 任务详细进度：任务名可点，弹窗里直接加载 xxxx/progress.html。 */
@@ -382,6 +619,7 @@
     var url = progressUrl(task);
     document.getElementById('progress-modal-title').textContent = task.name + ' · 详细进度';
     document.getElementById('progress-modal-open').href = url;
+    showSkeleton('progress-skeleton');
     document.getElementById('progress-frame').src = url;
     document.getElementById('progress-modal').classList.add('is-open');
     currentProgress = task.name;
@@ -451,9 +689,28 @@
   }
 
   document.getElementById('reload').addEventListener('click', function () { location.reload(); });
+  var dbOverviewBtn = document.getElementById('db-overview');
+  if (dbOverviewBtn) {
+    dbOverviewBtn.addEventListener('click', function () { previewDbOverview(); });
+  }
+  document.getElementById('modal-frame').addEventListener('load', function () {
+    hideSkeleton('preview-skeleton');
+  });
+  document.getElementById('progress-frame').addEventListener('load', function () {
+    hideSkeleton('progress-skeleton');
+  });
   document.getElementById('modal-close').addEventListener('click', function () {
     document.getElementById('modal').classList.remove('is-open');
     document.getElementById('modal-frame').src = 'about:blank';
+  });
+  document.getElementById('modal-refresh').addEventListener('click', function () {
+    var frame = document.getElementById('modal-frame');
+    if (frame.src && frame.src !== 'about:blank') frame.src = frame.src;
+    toast('已刷新预览', 1500);
+  });
+  document.getElementById('doc-modal-close').addEventListener('click', closeDocPreview);
+  document.getElementById('doc-modal').addEventListener('click', function (event) {
+    if (event.target === this) closeDocPreview();
   });
   document.getElementById('progress-close').addEventListener('click', closeProgress);
   document.getElementById('progress-refresh').addEventListener('click', function () {
@@ -487,7 +744,20 @@
     }
     if (ds.ui !== undefined) {
       event.preventDefault();
-      if (ONLINE) preview(ds.ui); else openPreviewWindow(ds.ui);
+      preview(ds.ui);
+      return;
+    }
+    if (ds.db !== undefined) {
+      event.preventDefault();
+      previewDb(ds.db);
+      return;
+    }
+    if (ds.previewDoc !== undefined) {
+      openDocPreview(ds.index, ds.previewDoc);
+      return;
+    }
+    if (ds.saveDb !== undefined) {
+      saveDb(ds.saveDb);
       return;
     }
     if (ds.rerun !== undefined) {
@@ -554,6 +824,41 @@
   if (!ONLINE) document.getElementById('offline-tip').style.display = '';
   connectLive();
   render();
+})();
+</script>
+<noscript><style>.hcli-skeleton{display:none!important}</style></noscript>
+<style>
+  .hcli-skeleton{position:fixed;inset:0;z-index:9998;background:#f5f5f5;padding:24px;box-sizing:border-box;
+    transition:opacity .18s ease;overflow:hidden}
+  .hcli-skeleton.is-hidden{opacity:0;visibility:hidden;pointer-events:none}
+  .hcli-sk{border-radius:8px;background:linear-gradient(90deg,#ececec 25%,#f7f7f7 37%,#ececec 63%);
+    background-size:400% 100%;animation:hcli-sk 1.15s ease infinite;margin-bottom:12px}
+  @keyframes hcli-sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+  .hcli-sk-row{display:flex;gap:12px}
+  .hcli-sk-row .hcli-sk{flex:1;margin-bottom:0}
+</style>
+<div class="hcli-skeleton" id="hcli-skeleton" aria-hidden="true">
+  <div class="hcli-sk" style="width:220px;height:26px"></div>
+  <div class="hcli-sk" style="width:100%;height:52px"></div>
+  <div class="hcli-sk-row">
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+    <div class="hcli-sk" style="height:120px"></div>
+  </div>
+  <div class="hcli-sk" style="width:100%;height:180px"></div>
+  <div class="hcli-sk" style="width:65%;height:18px"></div>
+  <div class="hcli-sk" style="width:85%;height:18px"></div>
+</div>
+<script>
+(function(){
+  var el = document.getElementById('hcli-skeleton');
+  if (!el) return;
+  function hide() {
+    el.classList.add('is-hidden');
+    setTimeout(function(){ if (el.parentNode) el.parentNode.removeChild(el); }, 260);
+  }
+  if (document.readyState === 'complete') setTimeout(hide, 300);
+  else window.addEventListener('load', function(){ setTimeout(hide, 300); });
 })();
 </script>
 </body>

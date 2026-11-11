@@ -1,0 +1,47 @@
+{
+  "name": "dsh-plugin-harness-cli",
+  "version": "0.1.5",
+  "description": "Generate and validate Harness project configuration: AGENTS.md, gates, specs, progress, and business wiki.",
+  "author": {
+    "name": "gouqingping",
+    "url": "https://github.com/gouqingping"
+  },
+  "homepage": "https://github.com/gouqingping/dsh-plugin-harness-cli",
+  "repository": "https://github.com/gouqingping/dsh-plugin-harness-cli",
+  "license": "CC0-1.0",
+  "keywords": [
+    "harness",
+    "agents-md",
+    "project-configuration",
+    "tdd",
+    "ddd",
+    "sdd",
+    "codex",
+    "dsh"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Harness CLI",
+    "shortDescription": "Generate and validate project collaboration files",
+    "longDescription": "Install a shared Harness workflow for AGENTS.md, environment and gate scripts, feature scope, state files, DDD/SDD/TDD task docs, progress pages, database design with ER diagrams, and business-facing wiki documents. The plugin exposes the same 13 harness_cli_* tools in Codex and DSH.",
+    "developerName": "gouqingping",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/gouqingping/dsh-plugin-harness-cli",
+    "privacyPolicyURL": "https://github.com/gouqingping/dsh-plugin-harness-cli/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/gouqingping/dsh-plugin-harness-cli/blob/main/TERMS.md",
+    "defaultPrompt": [
+      "Initialize a Harness setup for this repository.",
+      "Check this repository against its Harness rules."
+    ],
+    "composerIcon": "./icon.svg",
+    "logo": "./icon.svg",
+    "screenshots": [],
+    "brandColor": "#0F766E"
+  }
+}

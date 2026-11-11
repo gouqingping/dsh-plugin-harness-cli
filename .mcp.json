@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "harness-cli": {
+      "title": "Harness CLI",
+      "description": "Generate and validate Harness project configuration through the bundled CLI.",
+      "cwd": ".",
+      "command": "node",
+      "args": [
+        "./plugin/codex-mcp.mjs"
+      ]
+    }
+  }
+}

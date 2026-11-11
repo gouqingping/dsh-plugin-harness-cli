@@ -1,0 +1,65 @@
+# {{task}} · 数据模型设计
+
+> 任务：`{{task}}` · 项目：{{project.name}} · 生成日期：{{today}}
+>
+> **唯一真源**：`docs/specs/{{task}}/schema.sql`。
+> `docs/specs/{{task}}/er.mmd` 与 `prototype/{{task}}/db/index.html` 由 `/harness-cli sql {{task}}`
+> 从 schema.sql 生成，不要手改。
+> 参考：[Google Cloud Spanner · Schema and data model](https://cloud.google.com/spanner/docs/schema-and-data-model)、
+> [Google ZetaSQL · Lexical structure](https://docs.cloud.google.com/spanner/docs/reference/standard-sql/lexical)。
+
+## 1. 目标与边界
+
+- 这个任务的数据要支撑什么业务能力：待填。
+- 不做什么（非目标）：待填。
+- 数据量与增长预期：待填（影响索引与分区策略）。
+
+## 2. 建模规范（Google 数模规范）
+
+| 维度 | 规则 |
+|---|---|
+| 命名 | 表名 / 字段名 `snake_case`；表名单数；避开 SQL 保留字 |
+| 主键 | 每张表必须有主键，推荐 `<表名>_id`；高并发写入避免纯自增热点（需要时用 UUIDv7 / 雪花 ID） |
+| 外键 | 列名 `<被引用表>_id`；必须声明 `REFERENCES`，并为外键建索引 |
+| 关系 | 1:N 用外键；M:N 用中间表；1:1 用唯一约束表达 |
+| 规范化 | 至少 3NF；不冗余存储可由其他表推导的数据 |
+| 类型 | 金额 `numeric(19,4)`；时间 `timestamptz`；布尔 `boolean`；避免用 `float` 存金额 |
+| 审计 | 核心表带 `created_at` / `updated_at`；软删除用 `deleted_at` |
+| 约束 | 业务规则写进 DDL（`NOT NULL` / `UNIQUE` / `CHECK` / `FK`）；不用触发器实现业务逻辑 |
+| 索引 | 只建查询需要的索引；复合索引把高选择性列 / 外键列放前面 |
+| 迁移 | 只做加法（加表 / 加可空列）；破坏性变更走双写或新表迁移 |
+
+## 3. 实体与关系
+
+待填：列出实体、职责、关键属性，以及实体之间的关系（1:1 / 1:N / M:N）。
+每条关系写清「谁引用谁、基数、业务含义」；这些说明会同步到 `prototype/{{task}}/db/index.html` 的关系说明。
+
+| 实体 | 职责 | 关键属性 | 关系 |
+|---|---|---|---|
+| 待填 | 待填 | 待填 | 待填 |
+
+## 4. 表设计
+
+待填：逐表说明字段、类型、是否可空、默认值、主键 / 外键 / 唯一约束。
+每个字段都要有说明：在 `schema.sql` 里写 `COMMENT ON COLUMN`（或行尾 `-- 说明`），
+否则数模图会把该字段标成「缺说明」，lint 也会给 DB015 警告。
+
+## 5. 索引与约束
+
+待填：说明每个索引服务的查询；外键索引；唯一约束；检查约束。
+
+## 6. 生命周期与迁移
+
+- 数据保留 / 归档策略：待填。
+- 软删除与恢复：待填。
+- 迁移步骤与回滚：待填。
+- 风险与待确认：待填。
+
+## 7. 生成物
+
+- `docs/specs/{{task}}/schema.sql`：DDL（唯一真源）。
+- `docs/specs/{{task}}/er.mmd`：Mermaid ER 图（自动生成）。
+- `prototype/{{task}}/db/index.html`：离线数模图（自动生成）。
+
+<!-- harness-db:begin -->
+<!-- harness-db:end -->

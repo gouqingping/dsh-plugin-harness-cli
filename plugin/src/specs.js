@@ -9,7 +9,7 @@
  * - 生成内容不带「待填」，让 review/确认能往下走；真正的质量判断留给 review + 人工确认。
  */
 
-const SPEC_FILES = ['proposal.md', 'spec.md', 'design.md', 'tasks.md'];
+const SPEC_FILES = ['flow.md', 'proposal.md', 'spec.md', 'design.md', 'tasks.md'];
 
 function escapeHtml(text) {
   return String(text)
@@ -158,6 +158,59 @@ function mergeFlags(model, flags) {
 }
 
 /** 渲染四份规范文档。 */
+/**
+ * 业务流程图：先对齐流程，再根据它做页面 / 交互 / 数据 / UI 设计与文档。
+ * Mermaid 是纯文本源；plan 页会把同样的步骤渲染成可读的流程图。
+ */
+function renderFlowDoc(model) {
+  const steps = model.steps.map((step, index) => ({id: `S${index + 1}`, title: step.title}));
+  const lines = ['flowchart TD', '  A[开始]'];
+  if (steps.length === 0) {
+    lines.push('  A --> B[主流程]');
+    lines.push('  B --> Z[结束]');
+  } else {
+    lines.push(`  A --> ${steps[0].id}["${steps[0].title.replace(/"/g, '&quot;')}"]`);
+    for (let i = 1; i < steps.length; i += 1) {
+      lines.push(
+        `  ${steps[i - 1].id} --> ${steps[i].id}["${steps[i].title.replace(/"/g, '&quot;')}"]`
+      );
+    }
+    lines.push(`  ${steps[steps.length - 1].id} --> Z[结束]`);
+  }
+  return [
+    `# ${model.task} · 业务流程图`,
+    '',
+    '> 先规划并确认业务流程图，再根据流程图做页面 / 交互 / 数据 / UI 设计与文档；',
+    '> 流程图确认前不要把模板当成已定稿，提前生成的页面用骨架屏等待内容。',
+    '',
+    '## 1. 参与角色',
+    '',
+    `- 发起人：${model.terms[0] ? `${model.terms[0].term}（${model.terms[0].definition}）` : '用户'}`,
+    `- 系统边界：${model.context}`,
+    '',
+    '## 2. 业务流程图',
+    '',
+    '```mermaid',
+    ...lines,
+    '```',
+    '',
+    `- 主流程：${model.flow.main}`,
+    '',
+    '## 3. 异常路径',
+    '',
+    `- ${model.flow.error}`,
+    '',
+    '## 4. 状态流转',
+    '',
+    `- ${model.flow.state}`,
+    '',
+    '## 5. 确认',
+    '',
+    '- 流程图确认后再开始页面设计、交互、数据模型与 UI 设计；有变更先改本图，再改下游文档。',
+    '',
+  ].join('\n');
+}
+
 function renderDocs(model) {
   const proposal = [
     `# ${model.task} · 提案（Proposal）`,
@@ -238,7 +291,13 @@ function renderDocs(model) {
     '',
   ].join('\n');
 
-  return {'proposal.md': proposal, 'spec.md': spec, 'design.md': design, 'tasks.md': tasks};
+  return {
+    'flow.md': renderFlowDoc(model),
+    'proposal.md': proposal,
+    'spec.md': spec,
+    'design.md': design,
+    'tasks.md': tasks,
+  };
 }
 
 /** 渲染任务页里需要被内容替换的区块。 */
@@ -316,7 +375,27 @@ function applyToPage(html, model) {
 /** 把模型写进方案页 HTML（目标 / 方案 / 页面设计 / 流程 / 风险 / 验收）。 */
 function applyToPlan(html, model) {
   const list = (items) => items.map((item) => `      <li>${escapeHtml(item)}</li>`).join('\n');
+  const flowSteps = model.steps.length > 0 ? model.steps.map((step) => step.title) : ['主流程'];
+  const flowNodes = ['开始', ...flowSteps, '结束'];
+  const diagram = flowNodes
+    .map((title, index) => {
+      const node = `<span class="flow-node">${escapeHtml(title)}</span>`;
+      return index < flowNodes.length - 1 ? `${node}<span class="flow-arrow">→</span>` : node;
+    })
+    .join('\n        ');
   let next = html
+    .replace(
+      /(<div class="flow-row" data-flow-diagram>)[\s\S]*?(<\/div>)/,
+      `$1\n        ${diagram}\n      $2`
+    )
+    .replace(
+      /(<ul data-flow-list>)[\s\S]*?(<\/ul>)/,
+      `$1\n${list([
+        `主流程：${model.flow.main}`,
+        `异常路径：${model.flow.error}`,
+        `状态流转：${model.flow.state}`,
+      ])}\n    $2`
+    )
     .replace(
       /(<section id="goal"[^>]*>[\s\S]*?<ul>)[\s\S]*?(<\/ul>)/,
       `$1\n${list([`原话：${model.userWords}`, `目标：${model.goal}`, `非目标：${model.nonGoals.join('；')}`])}\n    $2`

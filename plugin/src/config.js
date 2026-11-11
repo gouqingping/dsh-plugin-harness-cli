@@ -107,7 +107,7 @@ const DEFAULT_DOD = [
 
 /** 默认工作流：四件套闭环。用 {占位符} 引用配置里的路径。 */
 const DEFAULT_WORKFLOW = [
-  '开工先读 `{progress}`：恢复上次进度与未完成项。',
+  '开工先读 `{progress}`：恢复上次进度；有未完成任务时先继续完成，不要从零重做或另起无关任务。',
   '读 `{featureList}`，取一个 `status = pending` 且依赖已完成的 feature，置为 `in_progress`（全局最多一个）。',
   '按该 feature 的 `acceptance` 实现并补测试，不碰范围外文件。',
   '跑 `{gate}`，全绿才算过。',
