@@ -9,7 +9,7 @@
 ## 安装（DSH 插件市场）
 
 ```sh
-# npm 最新发布 0.1.1；仓库当前版本 0.1.6-rc（预发布，未发布），也是 DSH 插件中心用的安装命令
+# npm 最新发布 0.1.6-rc
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
