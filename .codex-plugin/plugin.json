@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-harness-cli",
-  "version": "0.1.6-rc",
+  "version": "0.1.6",
   "description": "Generate and validate Harness project configuration: AGENTS.md, gates, specs, progress, and business wiki.",
   "author": {
     "name": "gouqingping",

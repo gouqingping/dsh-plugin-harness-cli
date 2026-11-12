@@ -9,7 +9,7 @@
 ## 安装（DSH 插件市场）
 
 ```sh
-# npm 最新发布 0.1.6-rc
+# npm 最新发布 0.1.6
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
