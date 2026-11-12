@@ -80,8 +80,19 @@
 | H2 | 重启恢复 | 进度、认领、文档都在 | 平台集成需重启后才加载 |
 | H3 | 迁移 | 拷目录可继续 | 平台注册路径需同步更新 |
 
+{{#if docs.acceptance}}
+## 场景 I · 各任务的业务验收（来自规范文档）
+
+{{#each docs.acceptance}}
+### {{task}}
+
+{{#each items}}- {{this}}
+{{/each}}
+{{/each}}
+{{/if}}
+
 ## 验收结论记录
 
 | 场景 | 执行人 | 日期 | 结论 | 证据位置 |
 |---|---|---|---|---|
-| A–H | 待填 | 待填 | 待填 | 待填 |
+| A–{{#if docs.acceptance}}I{{/if}}{{#unless docs.acceptance}}H{{/unless}} | 待填 | 待填 | 待填 | 待填 |

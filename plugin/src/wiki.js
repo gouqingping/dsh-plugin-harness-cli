@@ -6,8 +6,12 @@
  * 设计约束（与工具其他部分一致）：
  * - 只读扫描 + 生成：不推断、不编造。拿不到的写「待补」，并说明去哪儿补。
  * - 每篇文档只有一个**受管区块**（`<!-- harness-wiki:begin/end -->`）；
- *   区块外的人工内容永远不动，区块内被人工改过就报冲突，由调用方决定更新还是保留。
- * - 冲突不静默：默认 `ask`；非交互环境返回 1 并列出冲突，由 Agent 询问用户后带 `--update` / `--keep` 重跑。
+ *   区块外的人工内容永远不动。
+ * - 重跑默认**增量合并**：把上次生成的内容当基线，和文件现状、本次生成做三路合并；
+ *   生成器改的事实（数量、状态、清单）自动刷新，人改过的段落原样保留；两边改到同一段时保留人工版本。
+ *   `--update` 才是整块重写（回到生成器基线），`--keep` 只补缺失文件。
+ * - 业务内容不是只靠人工补：`docs/specs` 的提案 / 契约 / 设计、`docs/adr` 会被反推成业务事实，
+ *   由模板直接写进受管区块（见 wikidocs.js）。
  */
 
 const fs = require('fs');
@@ -17,6 +21,7 @@ const {exists, isDir, readIfExists, readJsonIfExists, writeFileSafe, toPosix} = 
 const {loadConfig, resolveConfigFile} = require('./config');
 const {render} = require('./render');
 const {loadTemplate} = require('./templates');
+const {collectDocFacts} = require('./wikidocs');
 
 const BEGIN = '<!-- harness-wiki:begin -->';
 const END = '<!-- harness-wiki:end -->';
@@ -428,6 +433,8 @@ function collectFacts(root) {
       // 只给「声明了业务名」的目录生成下钻页：目录名（bin / src）是代码结构，不是业务域
       .filter((d) => d.path && d.name)
       .map((d) => ({name: d.name, path: d.path, desc: d.desc || ''})),
+    // 已有规范文档里的业务事实（为什么做 / 范围 / 验收 / 术语 / 决策），反补进模板
+    docs: collectDocFacts(root, paths),
     today: new Date().toISOString().slice(0, 10),
     nowIso: new Date().toISOString(),
   };
@@ -452,9 +459,144 @@ function replaceBlock(text, body) {
   return `${text.slice(0, begin + BEGIN.length)}\n${body.trim()}\n${text.slice(end)}`;
 }
 
+/** 行级 LCS：返回 base 与 other 的匹配下标对。文档只有几百行，O(n*m) 足够。 */
+function lcsPairs(base, other) {
+  const n = base.length;
+  const m = other.length;
+  if (n === 0 || m === 0) return [];
+  const dp = Array.from({length: n + 1}, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] = base[i] === other[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const pairs = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (base[i] === other[j]) {
+      pairs.push([i, j]);
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  return pairs;
+}
+
+/**
+ * base → other 的改动块：base[aStart..aEnd) 被 lines 替换；纯插入时 aStart === aEnd。
+ * @param {string[]} base - 基线行。
+ * @param {string[]} other - 另一版本的行。
+ * @returns {Array<{aStart: number, aEnd: number, lines: string[]}>} 改动块（按位置升序）。
+ */
+function diffOps(base, other) {
+  const pairs = lcsPairs(base, other);
+  const ops = [];
+  let bi = 0;
+  let oi = 0;
+  for (const [mi, mj] of pairs) {
+    if (mi > bi || mj > oi) ops.push({aStart: bi, aEnd: mi, lines: other.slice(oi, mj)});
+    bi = mi + 1;
+    oi = mj + 1;
+  }
+  if (bi < base.length || oi < other.length) {
+    ops.push({aStart: bi, aEnd: base.length, lines: other.slice(oi)});
+  }
+  return ops;
+}
+
+function sameLines(a, b) {
+  return a.length === b.length && a.every((line, index) => line === b[index]);
+}
+
+/** 取某一侧对 base[a, b) 的版本；a / b 都是改动块的边界。 */
+function sideOf(base, ops, a, b) {
+  const out = [];
+  let pos = a;
+  for (const op of ops) {
+    if (op.aStart < a || op.aEnd > b) continue;
+    if (op.aStart > pos) out.push(...base.slice(pos, op.aStart));
+    out.push(...op.lines);
+    pos = op.aEnd;
+  }
+  if (pos < b) out.push(...base.slice(pos, b));
+  return out;
+}
+
+/**
+ * 三路合并：base = 上次生成的内容，ours = 文件现状（含人工改写），theirs = 本次生成。
+ *
+ * 规则：
+ * - 只有一边改了 → 取改过的一边（生成器的事实刷新、人工的段落都保留）；
+ * - 两边改成一样 → 取一次；
+ * - 两边改到同一段且结果不同 → 保留 ours（人工段落优先），并记一次 kept。
+ *
+ * @param {string[]} base - 基线行。
+ * @param {string[]} ours - 文件现状行。
+ * @param {string[]} theirs - 本次生成行。
+ * @returns {{lines: string[], kept: number}} 合并结果与被保留的人工改动段数。
+ */
+function merge3(base, ours, theirs) {
+  const opsOurs = diffOps(base, ours);
+  const opsTheirs = diffOps(base, theirs);
+  const tagged = [
+    ...opsOurs.map((op) => ({op, side: 'ours'})),
+    ...opsTheirs.map((op) => ({op, side: 'theirs'})),
+  ].sort((a, b) => a.op.aStart - b.op.aStart || a.op.aEnd - b.op.aEnd || (a.side === 'ours' ? -1 : 1));
+
+  const out = [];
+  let pos = 0;
+  let kept = 0;
+  let index = 0;
+  while (index < tagged.length) {
+    const first = tagged[index].op;
+    if (first.aStart > pos) {
+      out.push(...base.slice(pos, first.aStart));
+      pos = first.aStart;
+    }
+    const start = first.aStart;
+    let end = first.aEnd;
+    index += 1;
+    // 收集与当前区间重叠、或在边界处插入的改动块，作为同一段一起判
+    while (index < tagged.length) {
+      const candidate = tagged[index].op;
+      const touches =
+        candidate.aStart < end ||
+        (candidate.aStart === end && (candidate.aStart === candidate.aEnd || start === end));
+      if (!touches) break;
+      end = Math.max(end, candidate.aEnd);
+      index += 1;
+    }
+    const oursSeg = sideOf(base, opsOurs, start, end);
+    const theirsSeg = sideOf(base, opsTheirs, start, end);
+    if (start === end) {
+      // 纯插入：两边都插了就都留下，顺序是人工在前、生成在后
+      if (oursSeg.length === 0) out.push(...theirsSeg);
+      else if (theirsSeg.length === 0 || sameLines(oursSeg, theirsSeg)) out.push(...oursSeg);
+      else out.push(...oursSeg, ...theirsSeg);
+    } else {
+      const baseSeg = base.slice(start, end);
+      if (sameLines(oursSeg, baseSeg)) out.push(...theirsSeg);
+      else if (sameLines(theirsSeg, baseSeg)) out.push(...oursSeg);
+      else if (sameLines(oursSeg, theirsSeg)) out.push(...oursSeg);
+      else {
+        out.push(...oursSeg);
+        kept += 1;
+      }
+    }
+    pos = end;
+  }
+  if (pos < base.length) out.push(...base.slice(pos));
+  return {lines: out, kept};
+}
+
 /**
  * 接管一篇「没有受管区块」的既有文档：只在标题后插入受管区块，原文一个字都不改。
- * 这是 `--update` 在旧文档上的安全动作：不覆盖人工内容，只让文件从今以后可被增量更新。
+ * 默认合并与 `--update` 都走这一步：不覆盖人工内容，只让文件从今以后可被增量更新。
  * @param {string} title - 文档标题（文件没有一级标题时补上）。
  * @param {string} body - 受管区块内容。
  * @param {string} text - 既有文件原文。
@@ -483,7 +625,15 @@ function loadState(root, dir) {
 }
 
 /**
- * 计算计划：每篇是 create / update / keep / conflict 之一。
+ * 计算计划：每篇是 create / adopt / keep / update / merge / conflict 之一。
+ *
+ * - create：文件不存在；
+ * - adopt：文件存在但没有受管区块（补区块、原文保留）；
+ * - keep：内容已一致，或旧状态没有基线时先保留现状并建立基线；
+ * - update：受管区块自上次生成后没被改过，可以整块替换；
+ * - merge：受管区块有人工改动，按基线做三路合并；
+ * - conflict：区块标记不完整，写不了也不该猜。
+ *
  * @param {string} root - 目标仓库根目录。
  * @param {object} [opts] - {dir} 覆盖 wiki 目录。
  * @returns {{facts: object, dir: string, entries: Array, state: object}}
@@ -495,10 +645,12 @@ function planWiki(root, opts = {}) {
   const entries = [];
 
   const push = (name, title, body) => {
+    // 模板里的块标签会留下多余空行：统一压成一个
+    const clean = String(body).replace(/\n{3,}/g, '\n\n').trim();
     const abs = path.join(root, dir, name);
     const text = existsFile(abs) ? fs.readFileSync(abs, 'utf8') : null;
     if (text === null) {
-      entries.push({name, abs, action: 'create', body, content: compose(title, body)});
+      entries.push({name, abs, action: 'create', body: clean, content: compose(title, clean)});
       return;
     }
     const block = extractBlock(text);
@@ -509,41 +661,69 @@ function planWiki(root, opts = {}) {
           name,
           abs,
           action: 'conflict',
-          body,
+          body: clean,
           reason: '受管区块标记不完整（只有开始或只有结束），请手工修好再生成',
         });
         return;
       }
-      // 既有文档没有受管区块：当成「可接管」而不是「不可写」。
-      // --update 会补上区块并保留原文，让这份文件从今以后能被增量更新。
+      // 既有文档没有受管区块：补区块，原文一个字不动（原文仍在「人工补充」区）
       entries.push({
         name,
         abs,
-        action: 'conflict',
-        adoptable: true,
-        body,
-        reason: '文件里没有受管区块（--update 会补区块，原文保留）',
-        content: adoptBlock(title, body, text),
+        action: 'adopt',
+        body: clean,
+        reason: '文件里没有受管区块，补区块并保留原文',
+        content: adoptBlock(title, clean, text),
       });
       return;
     }
-    if (block === body.trim()) {
-      entries.push({name, abs, action: 'keep', body});
+    if (block === clean) {
+      entries.push({name, abs, action: 'keep', body: clean});
       return;
     }
-    const recorded = state.files && state.files[name] ? state.files[name].autoHash : null;
-    if (recorded !== null && recorded === sha1(block)) {
-      entries.push({name, abs, action: 'update', body, content: replaceBlock(text, body)});
-    } else {
-      entries.push({
-        name,
-        abs,
-        action: 'conflict',
-        body,
-        reason: recorded === null ? '没有上次生成的记录（首次接管既有文件）' : '受管区块被人工改过',
-        content: replaceBlock(text, body),
-      });
+    const recorded = (state.files && state.files[name]) || {};
+    if (typeof recorded.base === 'string') {
+      const merged = merge3(recorded.base.split('\n'), block.split('\n'), clean.split('\n'));
+      const mergedText = merged.lines.join('\n').trim();
+      if (mergedText === block) {
+        entries.push({
+          name,
+          abs,
+          action: 'keep',
+          body: clean,
+          reason: merged.kept > 0 ? `增量合并：${merged.kept} 处保留人工段落` : '与上次生成一致',
+          // 合并结果是「保持人工版本」，但 --update 仍应能整块重写
+          overwrite: replaceBlock(text, clean),
+        });
+      } else {
+        entries.push({
+          name,
+          abs,
+          action: 'merge',
+          body: clean,
+          kept: merged.kept,
+          reason: merged.kept > 0 ? `增量合并：${merged.kept} 处保留人工段落` : '',
+          content: replaceBlock(text, mergedText),
+          // --update 用这份：整块回到生成器基线
+          overwrite: replaceBlock(text, clean),
+        });
+      }
+      return;
     }
+    if (recorded.autoHash === sha1(block)) {
+      entries.push({name, abs, action: 'update', body: clean, content: replaceBlock(text, clean)});
+      return;
+    }
+    // 旧版状态只记了哈希、没有基线：本次保留人工内容，并记下本次生成作为下次合并的基线。
+    entries.push({
+      name,
+      abs,
+      action: 'keep',
+      body: clean,
+      establishBase: true,
+      overwrite: replaceBlock(text, clean),
+      reason: '旧状态没有合并基线：本次保留人工段落并建立基线，下次起按事实差异合并',
+    });
   };
 
   for (const file of FILES) {
@@ -556,79 +736,119 @@ function planWiki(root, opts = {}) {
   return {facts, dir, entries, state};
 }
 
-/** 新状态：只记录本次实际写入的区块。 */
-function nextState(prev, entries, applied) {
-  const files = {...(prev.files || {})};
-  for (const entry of applied) {
-    files[entry.name] = {autoHash: sha1(entry.body.trim()), generatedAt: new Date().toISOString()};
+/**
+ * 新状态：记录每篇本次生成的正文，下次合并时作为基线。
+ *
+ * 只有真正写盘的条目才把基线推进到本次生成；「保留现状」的条目沿用旧基线，
+ * 这样人工改动在下一次合并里仍然只算「人改的部分」，不会被误当成生成器改的。
+ */
+function nextState(prev, entries, resolved) {
+  const now = new Date().toISOString();
+  const files = {};
+  const wrote = new Set(['create', 'update', 'merge', 'adopt']);
+  for (const entry of entries) {
+    const action = resolved.get(entry.name);
+    const previous = prev.files && prev.files[entry.name];
+    if (action === 'conflict') {
+      // 标记坏掉的文件不更新基线：修好后还能按旧基线合并
+      if (previous) files[entry.name] = previous;
+      continue;
+    }
+    if (wrote.has(action)) {
+      if (typeof entry.body !== 'string' || entry.body.trim() === '') continue;
+      files[entry.name] = {autoHash: sha1(entry.body.trim()), generatedAt: now, base: entry.body.trim()};
+      continue;
+    }
+    if (previous && typeof previous.base === 'string') {
+      files[entry.name] = previous;
+      continue;
+    }
+    // 旧版状态没有基线：保留人工内容的同时补一条，下一次才能做三路合并
+    if (entry.establishBase === true && typeof entry.body === 'string' && entry.body.trim() !== '') {
+      files[entry.name] = {autoHash: sha1(entry.body.trim()), generatedAt: now, base: entry.body.trim()};
+      continue;
+    }
+    if (previous) files[entry.name] = previous;
   }
-  return {version: 1, generatedAt: new Date().toISOString(), files};
+  return {version: 2, generatedAt: now, files};
+}
+
+/** 把用户传的模式归一：默认 merge；ask 是旧名字，等价于 merge。 */
+function normalizeMode(mode) {
+  if (mode === 'auto' || mode === 'update') return 'auto';
+  if (mode === 'keep') return 'keep';
+  return 'merge';
 }
 
 /**
  * 执行计划。
  * @param {string} root - 目标仓库根目录。
- * @param {{mode?: 'ask'|'auto'|'keep', dryRun?: boolean, ask?: Function, dir?: string}} options - 运行选项。
- * @returns {{entries: Array, conflicts: Array, changed: number, state: object}}
+ * @param {{mode?: 'merge'|'ask'|'auto'|'keep', dryRun?: boolean, dir?: string}} options - 运行选项。
+ * @returns {{entries: Array, conflicts: Array, changed: number, kept: number, state: object}}
  */
 function applyWiki(root, options = {}) {
   const {entries, dir, state} = planWiki(root, options);
-  const mode = options.mode || 'ask';
+  const mode = normalizeMode(options.mode);
   const dryRun = options.dryRun === true;
-  const ask = options.ask;
   const applied = [];
   const results = [];
+  const resolved = new Map();
 
   for (const entry of entries) {
     let action = entry.action;
     let content = entry.content;
-    if (action === 'conflict') {
-      if (mode === 'auto') {
+    if (mode === 'keep' && action !== 'create' && action !== 'conflict') {
+      action = 'keep';
+    } else if (mode === 'auto') {
+      if (action === 'merge') {
         action = 'update';
-        content = entry.content;
-      } else if (mode === 'ask' && typeof ask === 'function') {
-        const answer = ask(entry);
-        if (answer === 'update') {
-          action = 'update';
-          content = entry.content;
-        } else if (answer === 'update-all') {
-          action = 'update';
-          content = entry.content;
-          options.mode = 'auto';
-        } else {
-          action = 'keep';
-        }
-      } else {
-        action = 'conflict';
+        content = entry.overwrite;
+      } else if (action === 'adopt') {
+        action = 'update';
+      } else if (action === 'keep' && typeof entry.overwrite === 'string') {
+        action = 'update';
+        content = entry.overwrite;
       }
     }
-    // 没有可写内容的冲突（例如区块标记不完整）不能硬写：写盘前先挡一道，
-    // 避免把 undefined 交给写文件，也避免「看起来更新了、其实没修」。
-    if ((action === 'create' || action === 'update') && typeof content !== 'string') {
+    // 没有可写内容的条目不能硬写：避免把 undefined 交给写文件
+    const writes = action === 'create' || action === 'update' || action === 'merge' || action === 'adopt';
+    if (writes && typeof content !== 'string') {
       action = 'conflict';
       entry.reason = entry.reason || '没有可写内容，已跳过';
     }
-    if ((action === 'create' || action === 'update') && !dryRun) {
+    if ((action === 'create' || action === 'update' || action === 'merge' || action === 'adopt') && !dryRun) {
       writeFileSafe(entry.abs, content);
     }
-    if (action === 'create' || action === 'update') applied.push(entry);
-    results.push({name: entry.name, action, reason: entry.reason || '', adoptable: entry.adoptable === true});
+    if (action === 'create' || action === 'update' || action === 'merge' || action === 'adopt') applied.push(entry);
+    resolved.set(entry.name, action);
+    results.push({
+      name: entry.name,
+      action,
+      reason: entry.reason || '',
+      kept: Number.isInteger(entry.kept) ? entry.kept : 0,
+    });
   }
 
   const conflicts = results.filter((r) => r.action === 'conflict');
-  // 「内容已一致」的 keep 也要记哈希，否则下一次事实变动会被误判成人工改动
-  const stateEntries = [...applied, ...entries.filter((e) => e.action === 'keep')];
   if (!dryRun) {
     const stateFile = statePath(root, dir);
+    const serialized = `${JSON.stringify(nextState(state, entries, resolved), null, 2)}\n`;
     try {
-      if (isDir(path.dirname(stateFile))) {
-        writeFileSafe(stateFile, `${JSON.stringify(nextState(state, stateEntries, stateEntries), null, 2)}\n`);
+      // 内容没变就不重写，避免每次运行都制造 diff
+      if (isDir(path.dirname(stateFile)) && readIfExists(stateFile) !== serialized) {
+        writeFileSafe(stateFile, serialized);
       }
     } catch (err) {
-      // 状态写不进去不影响已生成的文档；下次会把它们当冲突处理，属于安全方向
+      // 状态写不进去不影响已生成的文档；下次会退化成「保留人工段落」，属于安全方向
     }
   }
-  return {entries: results, conflicts, changed: applied.length, state};
+  return {
+    entries: results,
+    conflicts,
+    changed: applied.length,
+    kept: results.reduce((sum, item) => sum + item.kept, 0),
+    state,
+  };
 }
 
 /** 供 check / 报告用：有没有既存 wiki、是否落后于事实。 */
@@ -636,11 +856,13 @@ function wikiStatus(root, opts = {}) {
   const {entries} = planWiki(root, opts);
   return {
     exists: entries.some((e) => e.action !== 'create'),
-    stale: entries.filter((e) => e.action === 'update').map((e) => e.name),
+    // 过期 = 重跑会写入（含可自动合并的人工改动），不含「保持现状」
+    stale: entries.filter((e) => e.action === 'update' || e.action === 'merge').map((e) => e.name),
     missing: entries.filter((e) => e.action === 'create').map((e) => e.name),
+    // 只剩真正修不了的：受管区块标记不完整
     conflicts: entries.filter((e) => e.action === 'conflict').map((e) => e.name),
-    // 没有受管区块的既有文档：可被 --update 接管（补区块、原文保留），不算「被改坏」
-    adoptable: entries.filter((e) => e.action === 'conflict' && e.adoptable).map((e) => e.name),
+    // 没有受管区块的既有文档：重跑（或 --update）会补区块、原文保留
+    adoptable: entries.filter((e) => e.action === 'adopt').map((e) => e.name),
   };
 }
 
@@ -708,4 +930,6 @@ module.exports = {
   wikiStatus,
   compose,
   extractBlock,
+  merge3,
+  diffOps,
 };

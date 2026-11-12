@@ -169,6 +169,7 @@ function syncProposalFromWiki(root, paths, factsOf) {
 }
 
 module.exports = {
+  upsertBlock,
   UI_BEGIN,
   UI_END,
   WIKI_BEGIN,

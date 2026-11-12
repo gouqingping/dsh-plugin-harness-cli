@@ -1,7 +1,7 @@
 # dsh-plugin-harness-cli
 
-> **DSH / Codex 插件**：同一个包在 DSH 里提供 13 个工具（`harness_cli_*`）与 1 条聚合斜杠命令
-> （`/harness-cli`），在 Codex 里通过本地 MCP 提供同样的 13 个工具和一条 `$harness-cli` 技能；
+> **DSH / Codex 插件**：同一个包在 DSH 里提供 14 个工具（`harness_cli_*`）与 1 条聚合斜杠命令
+> （`/harness-cli`），在 Codex 里通过本地 MCP 提供同样的 14 个工具和一条 `$harness-cli` 技能；
 > 两个宿主共用 `src/`、`templates/` 与业务执行，不靠提示词各自发挥。
 
 [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/gouqingping/dsh-plugin-harness-cli)
@@ -9,14 +9,14 @@
 ## 安装（DSH 插件市场）
 
 ```sh
-# npm 最新发布 0.1.1；仓库当前版本 0.1.5（未发布），也是 DSH 插件中心用的安装命令
+# npm 最新发布 0.1.1；仓库当前版本 0.1.6-rc（预发布，未发布），也是 DSH 插件中心用的安装命令
 dsh plugin --profile web add dsh-plugin-harness-cli
 
 # 只从源码安装（不需要 npm 包，也能用）
 dsh plugin --profile web add github:gouqingping/dsh-plugin-harness-cli
 ```
 
-装完重启 DSH，然后在任意项目里执行 `/harness-cli` 并选「初始化」；命令与工具清单见 `/harness-cli help`。
+装完重启 DSH，然后在任意项目里执行 `/harness-cli` 并选「初始化」；命令与工具清单见 `/harness-cli help`；从开工到收尾的完整流程见 `/harness-cli help process`（别名 `flow` / `workflow` / `流程`）。
 
 ## 安装（Codex 插件市场）
 
@@ -135,18 +135,20 @@ common-agent/                    ← 工作区里的项目目录
 |---|---|---|
 | `init [--preset prototype] [--force] [--force-state] [--dry-run]` | 生成配置与骨架；已存在的非空文件默认不覆盖，状态文件即使 `--force` 也不覆盖 | 0 / 2 |
 | `agents [--stdout] [--force]` | 由 `harness-cli.json` 生成 `AGENTS.md`，并报行数（>100 警告，>120 失败） | 0 / 1 |
-| `page <任务名> [--user-words "原话"]` | 建任务页 + 五份规范文档（含业务流程图）+ 方案页 + 刷新总览（预设未开启会自动补；任务名支持中文） | 0 / 1 / 2 |
+| `page <任务名> [--user-words "原话"]` | 建任务页 + 五份规范文档（含业务流程图）+ 方案页 + 刷新总览；DSH 侧依次追问 UX → 数模 → UI（选了 UX / 数模后 UI 走关联生成）；任务名支持中文 | 0 / 1 / 2 |
 | `review [任务名] [--agent <标识>]` | 复盘：跑项目判定，写 `docs/specs/<task>/review.md`（含五份文档指纹，业务流程图改动也会让确认失效）；**省略任务名=自动选最近的任务** | 0 / 1 / 2 |
-| `plan [任务名] [--confirm --by "确认人"]` | 建任务时一次补全 `docs/specs` 五份文档 + 任务页 + 方案页；确认是可选步骤（确认前校验「复盘通过 + 文档指纹未变」）；省略任务名=最近的任务 | 0 / 1 / 2 |
+| `plan [任务名] [--confirm --by "确认人"]` | 只更新 / 生成 `docs/specs/<任务>/` 五份文档；未开工（总进度 0、方案未确认）时顺带把页面与方案页骨架补齐，已开工 / 已确认后只写 docs/specs；确认是可选步骤（确认前校验「复盘通过 + 文档指纹未变」）；省略任务名=最近的任务 | 0 / 1 / 2 |
 | `progress <任务名> [--step N --pct 0..100] [--status …] [--note …]` | 唯一进度写入口：改步骤 / 状态 → 追加记录 → 重算总进度 → 同步总览；**不要求先确认方案**（P21 由 check 在交付前拦） | 0 / 1 / 2 |
+| `ux [任务名...] [--user-words "需求"] [--resolve <编号...>] [--by "确认人"] [--apply]` | UX 与需求分析：整体报告 `prototype/ux.html` 永远覆盖全部任务与项目需求，另有 `prototype/<任务>/ux/index.html`；缺口带稳定编号，补文档重跑会自动移除，`--resolve` 逐条关闭；`--apply` 把结论写回任务 `design.md` 并同步直接关联任务；DSH 侧报告完成后询问更新任务 / 关闭待确认项 / 创建任务流程 | 0 / 1 / 2 |
 | `ui [任务名] [--user-words "原话"] [--force]` | 生成 antd 风格 UI 设计稿、同步 `design.md`，并把「设计说明缺口」列成清单；同时追加一条任务进度记录并更新 `task_queue.json`；CLI 默认保留已有设计，`/harness-cli ui` 默认覆盖重写 | 0 / 1 / 2 |
 | `sql [任务名] [--dry-run]` | 数据库设计：补 `docs/specs/<task>/schema.sql` 与 `database.md`，按 Google 数模规范 lint，生成 `er.mmd`、单任务数模图 `prototype/<task>/db/index.html`（含关系说明 / 字段说明）与整体数模图 `prototype/db.html`；同时追加任务进度记录并更新 `task_queue.json`；`/harness-cli sql` 对已有 schema 也会覆盖执行并重新派发设计；省略任务名=最近的任务 | 0 / 1 / 2 |
 | `delete <任务名> [<任务名>...] [--yes]` | 批量删除任务页 / 设计稿 / 数据模型 / 规范文档 / 复盘；删除后同步 `progress.html`、`plans.html`、`db.html`、`db-layout.json` 与 `docs/wiki`；默认只预演，`--yes` 才真删（DSH 侧多选后直接删，进行中的任务先停止） | 0 / 1 / 2 |
 | `check [--strict] [--json]` | 只读校验；`--strict` 让警告也算失败 | 0 / 1 / 2 |
 | `doctor [--json]` | 工具自检：Node 版本、模板、配置、可写、是否 git 仓库、python3 | 0 / 2 |
-| `plans [serve [端口] \| stop]` | 根目录 `plans.html`：任务总览（`serve` 省略端口时用随机安全端口，启动后回显地址；指定端口被占用会强制接管；`stop` 停止）（**点任务名弹窗看 `progress.html`** / 展开编辑五份文档与 `database.md` / `schema.sql` / 操作列「UI」「数模」弹窗预览 / 对话 / 删除 / 重跑 / 保存数模并刷新）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
-| `wiki [--update\|--keep\|--ask] [--check] [--dry-run]` | 生成 / 更新 `docs/wiki`（13 篇业务文档），并同步每个任务 `proposal.md` 的业务背景区块 | 0 / 1 / 2 |
+| `plans [serve [端口] \| stop]` | 根目录 `plans.html`：任务总览（`serve` 省略端口时用随机安全端口，启动后回显地址；指定端口被占用会强制接管；`stop` 停止）（**点任务名弹窗看 `progress.html`** / 展开编辑五份文档与 `database.md` / `schema.sql` / 操作列「UI」「数模」「UX」弹窗预览，顶部「整体 UX」「整体数模图」按钮 / 对话 / 删除 / 重跑 / 保存数模并刷新）；`--serve` 后按钮直接落盘，并通过 SSE 自动刷新列表与进度弹窗 | 0 / 2 |
+| `wiki [--merge\|--update\|--keep] [--check] [--dry-run]` | 生成 / 更新 `docs/wiki`（13 篇业务文档，默认增量合并、人工段落保留），并同步每个任务 `proposal.md` 的业务背景区块 | 0 / 1 / 2 |
 | `style <参数...>` | 把参数原样转给随包的 `harness-style`（代码风格 / 提交信息） | 透传 |
+| `help [process]` | 查看用法；不带主题时弹窗列出所有指令（可跳过看完整帮助）；`help process`（别名 `flow` / `workflow` / `流程`）打印从开工到收尾的完整任务流程 | 0 |
 
 通用参数：`--root <dir>` 指定目标仓库，`--json` 机器可读，`--dry-run` 只打印不落盘。
 
@@ -183,6 +185,9 @@ prototype/<task>/db/index.html 单任务数模图（关系说明 + 字段说明�
 prototype/db.html             整体数模图（全部任务合并，可拖动调整布局）
 prototype/db-layout.json      整体数模图的手动布局（plans 保存时写入）
 docs/wiki/*.md                业务文档（由 wiki 子命令生成，13 篇；业务域下钻页在 dirs 声明 name 时才有）
+prototype/ux.html             整体 UX 与需求分析报告（永远覆盖全部任务；同目录还有 ux.json、.ux-gaps.json、.ux-resolved.json）
+prototype/<task>/ux/index.html 单任务 UX 报告（同目录还有 report.json 与 .ux-gaps.json）
+docs/ux/requirements.md       项目级 UX 需求（ux --user-words 追加；整体报告每次都会带上）
 docs/claims/README.md        认领协议（人读的约定；每个 loop 的认领落在 docs/claims/<F-xxx>.json）
 docs/feature_list.json       功能清单（acceptance / evidence / depends_on / WIP 上限内并行）
 claude-progress.md           进度日志（六节，含「下一步行动」）
@@ -261,14 +266,16 @@ _VERSIONS/v<version>.md      版本说明（业务白话：改了什么 / 怎么
 3. **TDD 保质量**：每条用例挂在一条契约上，先 `red` 再 `green`，每条契约至少一条用例；
    验证步骤统一在模拟环境沙箱执行（入口 / 数据 / 命令 / 断言），不写真机验证步骤；
 4. **任务规划**：编号 1..N 的步骤（可人工增删），每步绑定一条契约；
-5. **进度记录**：每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻追加一条并更新任务页，
+5. **步骤流程**：任务页顶部按规划步骤生成横向流程，按百分比标「已完成 / 进行中 / 未开始」，
+   当前步骤高亮并标「当前」；点节点定位到步骤卡片，进度一变流程自动重算；
+6. **进度记录**：每一步变化（开始 / 完成 / 阻塞 / 改规划）都立刻追加一条并更新任务页，
    不攒到收工；末条总进度必须等于汇总。
 
 状态放 `prototype/`，文档归纳到 `docs/specs/`：
 
 ```
 prototype/progress.html                总览：进行中 / 待验收的所有任务（--sync 生成）
-prototype/<task>/progress.html          单任务：领域 + 契约 + 用例 + 规划 + 记录
+prototype/<task>/progress.html          单任务：步骤流程 + 领域 + 契约 + 用例 + 规划 + 记录
 prototype/<task>/plan.html              方案页：目标 / 方案 / 页面设计 / 流程交互 / 风险 / 验收 / 确认
 prototype/<task>/ui/index.html          UI 设计稿（antd v5 风格、离线静态页）
 prototype/<task>/ui/README.md           设计说明（页面目标 / 组件清单 / 状态 / 契约对应）
@@ -292,8 +299,9 @@ node scripts/prototype-check.js --prune --dry-run
 ```
 
 新建页是**骨架**（留着「待填」），填完 DDD / SDD / TDD 与文档后 `check` 才通过——这是故意的。
-任务一开始先写 `docs/specs/<task>/flow.md` 的业务流程图并在方案页确认；再跑 `plan <task>` 补全 `docs/specs/<task>/` 五份文档（业务流程图 / 提案 / 契约 / 设计 / 规划）、
-任务页的领域·契约·用例·规划区块，以及 `prototype/<task>/plan.html`（目标 / 方案 / 页面设计 / 流程交互 / 风险 / 验收）。
+任务一开始先写 `docs/specs/<task>/flow.md` 的业务流程图并在方案页确认；再跑 `plan <task>` 补全 `docs/specs/<task>/` 五份文档（业务流程图 / 提案 / 契约 / 设计 / 规划）。
+未开工（总进度 0、方案未确认）时，`plan` 会顺带把任务页的领域·契约·用例·规划区块与 `prototype/<task>/plan.html` 补齐；
+一旦有进度或方案已确认，`plan` 只写 `docs/specs`，不再改 `prototype` 下的页面。
 内容可以用参数覆盖：`--goal`、`--scope`、`--context`、`--term "术语=定义"`、`--contract "S-01|标题|输入|输出|错误|验收"`
 `--step "步骤|S-01"`，或整包 `--input-json '<json>'`。**人可以直接改这些文档**；再跑 `plan` 时已填好的文档默认不覆盖
 （`--force` 才重写）。改完：
@@ -301,7 +309,7 @@ node scripts/prototype-check.js --prune --dry-run
 1. `review <task>` —— Agent 复盘：跑项目判定（文档与页面一致性），写 `review.md`（含五份文档的指纹）；
 2. `plan <task> --confirm --by "确认人"` —— 确认方案（**可选**）：核对复盘指纹后，把方案标为「已确认」；
    走 DSH 工具 / 斜杠命令时，确认这一步会**弹窗让你点选**，选「取消」就保持未确认；
-3. `plan` 生成成功后**自动开工**：把任务推入执行，并在当前对话发起一个执行回合（按 `tasks.md` 的 Step 1..N 开工，
+3. `plan` 生成成功后**自动开工**（仅限未开工 / 未确认的任务；已开工 / 已确认时只更新 docs/specs，不触发执行）：把任务推入执行，并在当前对话发起一个执行回合（按 `tasks.md` 的 Step 1..N 开工，
    每步调用 `progress` 记录）；同时后台起 `plans` 操作台（默认随机安全端口，地址会回显在对话里）。
    只想改文档不想开工时用 `plan --confirm`（确认）或 `--dry-run`。
 4. `progress` **不要求先确认**：发起任务就能记进度，不用等方案确认。
@@ -323,10 +331,12 @@ node scripts/prototype-check.js --prune --dry-run
 或浏览器 localStorage；`plans.html` 里可直接预览整体图与单任务图，并能编辑 / 预览 `database.md`、`schema.sql`。
 `ui` / `sql` 生成产物后会往任务页 `progress.html` 追加一条活动记录（**不改步骤百分比**，不伪造进度），
 同时把任务状态 / 总进度 / 产物写进 `task_queue.json` 的 `items`；后续 `progress` 会同步队列里的状态与进度，
+任务页顶部有「步骤流程」：按规划步骤画成横向流程（已完成 / 进行中 / 未开始），当前步骤高亮，
+点节点定位到步骤卡片；老任务页在下一次 `progress` 写进度时会自动补上这个区块。
 任务页头部有「方案预览」按钮，点击弹窗加载同任务的 `plan.html`；方案页里的业务流程图源文件链接也可点击，弹窗渲染 `flow.md`（Mermaid 源码按 Markdown 预览，`file://` 下无法 fetch 时回退为新窗口打开）。
 
 `delete` 会把队列条目一并删除，并同步重生成 `prototype/progress.html`、`plans.html`、`prototype/db.html`、
-清理 `prototype/db-layout.json` 里已删除表的坐标，再跑一次 `wiki --update` 更新 `docs/wiki`。
+清理 `prototype/db-layout.json` 里已删除表的坐标，再跑一次 `wiki` 增量更新 `docs/wiki`。
 
 所有生成的 HTML（`plans.html`、`progress.html`、`plan.html`、`ui/index.html`、`db/index.html`、`prototype/db.html`）
 都带骨架屏：先显示占位块，页面/布局/iframe 数据就绪后再淡出显示真实内容。
@@ -375,37 +385,89 @@ node scripts/claim.js verify
 ## 9. 业务 wiki（`wiki` 子命令）
 
 `docs/wiki` 是给**非技术读者**（领导、售前、客户、实施、产品、测试、业务）看的 13 篇文档，
-内容从仓库文件扫描生成：配置、功能清单、任务页、规范文档、认领、门禁脚本。命令与参数：
+内容从仓库文件扫描生成：配置、功能清单、任务页、规范文档、认领、门禁脚本，以及 `docs/specs`
+与 `docs/adr` 里已经写好的业务事实。命令与参数：
 
 ```sh
-node plugin/bin/dsh-plugin-harness-cli.js wiki            # 缺则新建，有则更新（默认 ask）
-node plugin/bin/dsh-plugin-harness-cli.js wiki --keep     # 只补缺失，冲突文件保留
-node plugin/bin/dsh-plugin-harness-cli.js wiki --update   # 更新受管区块；无区块的既有文档补区块、正文原样保留
-node plugin/bin/dsh-plugin-harness-cli.js wiki --check    # 只报告：缺失 / 过期 / 待接管 / 冲突
+node plugin/bin/dsh-plugin-harness-cli.js wiki            # 默认增量合并：人工段落保留、事实刷新
+node plugin/bin/dsh-plugin-harness-cli.js wiki --keep     # 只补缺失，已有文件一个字不动
+node plugin/bin/dsh-plugin-harness-cli.js wiki --update   # 整块重写受管区块（回到生成器基线）
+node plugin/bin/dsh-plugin-harness-cli.js wiki --check    # 只报告：缺失 / 过期 / 待接管 / 标记损坏
 ```
 
-生成规则（`src/wiki.js`）：
+生成规则（`src/wiki.js` + `src/wikidocs.js`）：
 
 - **正文是业务白话**：不写命令、代码块、流程图、字段名与文件路径；技术细节留在 `README.md`；
   这一条由用例守着（生成物里出现三反引号、`mermaid` 或命令行即失败）；
 - 每篇只有一个**受管区块**：`<!-- harness-wiki:begin -->` … `<!-- harness-wiki:end -->`；
-- **区块外的人工内容永远不会被覆盖**，区块内被人工改过则报冲突；
-- 既有文档**没有**受管区块时判为「待接管」：`--update` 在标题后补上区块、正文一字不改，
-  之后这份文件进入正常增量维护；`ask` 在非交互环境只报告并以退出码 1 交给人拍板；
-- 冲突处理三档：`ask`（TTY 逐个询问；非 TTY 报告并以退出码 1 交给人拍板）、`auto`（接管 / 覆盖）、
-  `keep`（保留人工内容，只补缺失文件）；
-- 生成时间只写进 `docs/wiki/.harness-wiki.json`，不进正文，避免每次运行都制造改动；
+- **区块外的人工内容永远不会被覆盖**；
+- **重跑默认做三路合并**：上次生成的正文当基线，和文件现状、本次生成逐行合并。
+  生成器改的事实（数量、状态、清单）自动刷新，人改过的段落原样保留；两边改到同一段时保留人工版本，
+  输出里以「保留人工段落 N 处」计数。`--update` 才是整块重写，`--keep` 只补缺失文件；
+- 既有文档**没有**受管区块时：默认在标题后补上区块，原文一字不改地留在区块下；
+- 合并基线存在 `docs/wiki/.harness-wiki.json`（只记正文与哈希，不进文档正文）；
+- 配置里的 `wiki.mode` 可固定模式（`merge` / `auto` / `keep`）；旧版状态只有哈希、没有基线，
+  升级后第一次重跑会保留人工段落并补上基线，之后按事实差异合并；
+- 只剩一种真冲突：**受管区块标记不完整**（只有开始或只有结束）——写不了也不该猜，退出码 1，等人修；
+- **业务内容从 docs 反推**：`docs/specs/<任务>/proposal.md`（为什么做 / 范围 / 验收）、
+  `spec.md`（契约标题）、`design.md`（统一语言 / 不变量）、`docs/adr`（关键决策）会被清洗成业务白话
+  写进速览、功能清单、验收、术语、口径、规则几篇；读不到的才标「待业务确认」；
+- 生成时间只写进状态文件，不进正文，避免每次运行都制造改动；
 - **业务域下钻页只在 `dirs` 声明了 `name`（业务名）时生成**：目录名（`bin`、`src`）是代码结构，不是业务域；
 - **只反推项目自己的文件**：会排除工作区里嵌入的 harness-cli 工具目录（按包名 / `bin/dsh-plugin-harness-cli.js` 识别）以及它生成的脚本与页面（`scripts/claim.js`、`scripts/prototype-check.js`、`scripts/gate.sh`、`init.sh`、`prototype/`、`plans.html` 等），避免把工具自身当成业务代码；
 - 内容只来自扫描到的事实：技术栈、任务/功能、认领、定位都会**反推**；推不出来的业务内容标成
   「待业务确认」，以「仍需人工确认：N 处」列在输出里（文件:行），由 Agent 反推工作区补全后重跑。
 
-DSH 侧对应工具 `harness_cli_wiki` 与斜杠命令 `/harness-cli wiki`：模型先以默认模式跑，遇到退出码 1
-（待接管或冲突）就询问用户，再带 `auto` 或 `keep` 重跑。生成后若还有「仍需人工确认」的缺口，
-命令会通过 `agent.steer` **把「反推补全」消息直接发送到当前对话**（带缺口清单路径与步骤），
-Agent 用业务白话补完并重跑直到 0 缺口；`--check` 不会发起。
+DSH 侧对应工具 `harness_cli_wiki` 与斜杠命令 `/harness-cli wiki`：默认模式直接合并，不再因「人工改过」
+弹窗；生成后若还有「仍需人工确认」的缺口，命令会通过 `agent.steer` **把「反推补全」消息直接发送到当前对话**
+（带缺口清单路径与步骤），Agent 用业务白话补完并重跑直到 0 缺口；`--check` 不会发起。
 
-## 10. 随包的 harness-style（`style` 子命令）
+## 10. UX 分析（`ux` 子命令）
+
+`ux` 把「任务文档 + UI 说明 + 项目需求」整理成一份给产品 / 设计 / 测试看的 HTML 报告：
+
+- `prototype/ux.html`：**整体报告，永远覆盖仓库里的全部任务**；命令里选的任务只决定 `--apply` 回写谁（单任务报告每次都会刷新），不会让整体报告缩水。
+- `prototype/<任务>/ux/index.html`：单任务报告；另有 `prototype/ux.json`、`prototype/<任务>/ux/report.json`
+  （结构化数据）、`prototype/.ux-gaps.json`（待确认清单）与 `prototype/.ux-resolved.json`（逐条关闭记录）。
+- `docs/ux/requirements.md`：项目级需求；`--user-words` 会追加到这里，后续重跑不会丢。
+
+```sh
+node plugin/bin/dsh-plugin-harness-cli.js ux                    # 分析全部任务 + 项目需求
+node plugin/bin/dsh-plugin-harness-cli.js ux 登录页面           # 同样出整体报告；只把登录页面作为回写目标
+node plugin/bin/dsh-plugin-harness-cli.js ux --user-words "做一个审批流……"
+node plugin/bin/dsh-plugin-harness-cli.js ux --resolve G-1a2b3c4d --by "张三"
+node plugin/bin/dsh-plugin-harness-cli.js ux --apply 登录页面   # 写回 design.md，并刷新直接关联任务
+node plugin/bin/dsh-plugin-harness-cli.js ux --dry-run          # 只看将写入哪里
+```
+
+报告按**维度优先级**组织：用户与场景 → 需求拆解 → 任务关联 → 体验流程 → 异常与恢复 → 状态与反馈 →
+可用性 → 文档完整性。摘要给出维度进度；每个维度先给分析结论，再列缺口与怎么补。
+
+规则（`src/ux.js`）：
+
+- **全项目口径**：整体报告每次都分析全部任务；没有任务参数也能直接跑，不会因为某次只选了一个任务而缩水；
+- **优先分析**：用户与场景、需求拆解、体验流程、异常与恢复先形成结论；没有依据的才进待确认清单；
+- **缺口可关闭**：缺口编号由「任务 + 维度 + 描述」算出，重跑后保持稳定；补好文档重跑，已修好的条目自动消失，
+  关闭记录也会被清理；文档无法自动证明、但人已确认的，用 `ux --resolve <编号> --by "确认人"` 逐条关闭，
+  报告只列未关闭项，并把已关闭项折叠展示；
+- **任务关联**：在任意任务文档写「关联任务：任务名」即可显式声明（文档里互相提及也会识别）；
+  `--apply` 会一并刷新直接关联任务的 UX 复核区块，关联任务之间术语口径不一致也会进待确认；
+- **可用性检查只判断「文档里有没有依据」**：目标可感知 / 流程闭环 / 错误可恢复 / 状态可见 /
+  口径一致 / 少一步可防错 / 可访问与响应式；通过不等于体验好，待补才是行动项；
+- **阻断缺口清零才算分析完成**：缺主流程、为什么做、验收、占位符等计入阻断；
+  DSH 侧先派发「按维度逐条补 → 重跑 ux」，清零后才询问下一步；
+- **`--apply` 可重复执行**：把结论写进 `design.md` 的 `<!-- ux-report:begin -->` 受管区块，
+  只刷新选中任务与它们的直接关联任务；
+- **报告可交付**：离线、零依赖、可直接发给非技术读者；来自仓库 / 用户的文本会做 HTML 转义；
+- **创建任务走现有流程**：`page` 建任务页 + 规范文档 + 方案页，随后派发
+  「补文档 → ui → review → plan → 按步骤实现」。
+
+DSH 侧 `/harness-cli ux`（菜单「UX 分析」）：整体报告覆盖全部任务；多选框只用来指定回写 / 继续处理的任务，
+同一个输入框可以写项目需求。报告完成后询问「更新任务 / 逐条关闭待确认项 / 创建新任务 / 仅保留报告」。
+模型也可以直接调 `harness_cli_ux`（参数 `tasks` / `user_words` / `resolve` / `by` / `apply`）。
+生成报告后会刷新 `plans.html`：操作栏出现单任务「UX」按钮，顶部出现「整体 UX」按钮，点开在弹窗里直接看报告。
+
+## 11. 随包的 harness-style（`style` 子命令）
 
 代码风格与提交信息判定不重写，直接把 [`harness-style`](../agent-style-harness) 随包携带，
 放在 `plugin/vendor/agent-style-harness/`（含 `vendor/py` 的 yapf/isort 与 `vendor/node` 的 commitlint，
@@ -436,7 +498,7 @@ node plugin/bin/dsh-plugin-harness-cli.js style check --staged \
 前提：`style` 需要目标机器有 `python3`（harness-style 是 Python 实现）。
 没有 `python3` 时 `doctor` 会给出警告，其余子命令不受影响。
 
-## 11. 导入 DSH / Codex 当工具用
+## 12. 导入 DSH / Codex 当工具用
 
 CLI 是给人敲的；要让**模型自己**调用，就把它注册成宿主插件。DSH 适配层是 `plugin/cordis.mjs`
 （零依赖，只起子进程），判定与文案仍在 `src/` 与 `templates/`，所以工具行为和命令行逐字一致。
@@ -445,7 +507,7 @@ CLI 是给人敲的；要让**模型自己**调用，就把它注册成宿主插
 
 `.codex-plugin/plugin.json` 声明技能目录与 `.mcp.json`；`.mcp.json` 用
 `node ./plugin/codex-mcp.mjs` 启动本地 stdio 服务。服务直接复用 `cordis.mjs` 的
-`TOOL_SPECS` 与 `runCli`，因此 Codex 仍看到同样的 13 个工具名。
+`TOOL_SPECS` 与 `runCli`，因此 Codex 仍看到同样的 14 个工具名。
 
 Codex 启动 MCP 时的工作目录属于插件安装缓存，不是用户仓库，所以 Codex 工具要求每次显式传
 目标仓库的绝对 `root`；缺少或传入相对路径会直接报错，不会误写插件目录。
@@ -476,12 +538,13 @@ codex mcp list
 | `harness_cli_init` | `init` | 是（`dry_run` 可只预览） | 0 / 2 |
 | `harness_cli_page` | `page <task>` | 是（页面 + `docs/specs/` 五份文档 + 方案页 + 总览） | 0 / 1 / 2 |
 | `harness_cli_review` | `review <task>` | 是（`docs/specs/<task>/review.md`） | 0 / 1 / 2 |
-| `harness_cli_plan` | `plan <task> [--confirm]` | 是（`plan.html` + `review.md` 状态） | 0 / 1 / 2 |
+| `harness_cli_plan` | `plan <task> [--confirm]` | 是（`docs/specs`；未开工骨架补 `plan.html`；`review.md` 状态） | 0 / 1 / 2 |
 | `harness_cli_progress` | `progress <task>` | 是（步骤 / 状态 / 记录 / 总览） | 0 / 1 / 2 |
 | `harness_cli_ui` | `ui <task>` | 是（`prototype/<task>/ui/`） | 0 / 1 / 2 |
+| `harness_cli_ux` | `ux [tasks...] [--user-words] [--resolve] [--by] [--apply]` | 是（`prototype/ux.html`、`prototype/<task>/ux/`、`docs/ux/requirements.md`、`design.md` UX 区块） | 0 / 1 / 2 |
 | `harness_cli_sql` | `sql <task>` | 是（`schema.sql` / `database.md` / `er.mmd` / `db/index.html`） | 0 / 1 / 2 |
 | `harness_cli_delete` | `delete <task>` | 是（删任务页 / 设计稿 / 数据模型 / 规范文档 / 复盘） | 0 / 1 / 2 |
-| `harness_cli_wiki` | `wiki` | 是（`docs/wiki` 受管区块） | 0 / 1（冲突需决策）/ 2 |
+| `harness_cli_wiki` | `wiki` | 是（`docs/wiki` 受管区块） | 0 / 1（标记损坏）/ 2 |
 | `harness_cli_agents` | `agents` | 是（`dry_run` / `force`） | 0 / 1 |
 | `harness_cli_doctor` | `doctor` | 否（工具自检） | 0 / 2 |
 | `harness_cli_style` | `style` | 由透传参数决定 | 透传 |
@@ -491,14 +554,16 @@ codex mcp list
 方案未确认**不再拦进度**（P21 交给 `check` 在交付前拦）；任务不唯一或步骤匹配不到时跳过并在会话里告警；
 同一会话的事件串行处理。
 
-需要用户拍板的操作一律**弹窗点选**，不靠打印提示让人自己跑命令：wiki 冲突（接管 / 只补缺失 / 取消）、
+需要用户拍板的操作一律**弹窗点选**，不靠打印提示让人自己跑命令：
 删除任务（删除 / 取消）、`--force` 覆盖已有文件（覆盖 / 取消）、方案确认（确认 / 取消）都走这条路径；
-弹窗来自宿主的 `userQuestions` 服务。每次点选或输入后，结果会立即作为一条 `user/message`
-反馈到当前对话（例如 `已选择：生成 UI 设计稿`、`已输入：登录页面`），但不会唤醒额外的模型回合；
-没有可用 UI 时退化为非交互行为（删除则直接拒绝，要求 `--yes`）。
+弹窗来自宿主的 `userQuestions` 服务。会话已经有 `system` head 时，每次点选或输入后，结果会立即
+作为一条 `user/message` 反馈到当前对话（例如 `已选择：生成 UI 设计稿`、`已选择：数据看板`、`已输入：登录页面`），
+但不会唤醒额外的模型回合；首轮开始前还没有 head 时跳过这条独立反馈（命令结果仍照常返回），
+避免 surface 首个节点不是 `system/message` 导致整个会话历史无法冷读。没有可用 UI 时退化为非交互行为
+（删除则直接拒绝，要求 `--yes`）。
 
 输入框工具栏上还有一个**准星 + 指令**按钮（Web 客户端半边 `plugin/client.js`）：点开在按钮正上方弹出菜单，
-列出 16 条中文子指令；选中后只填入输入框，和 `/` 菜单一样按 Enter 才执行；需要任务名的会留一个空格，补完后回车。
+列出 15 条中文子指令（「推进度」已从菜单收起，仍可用 `/harness-cli progress` 或 CLI / 工具调用）；选中后只填入输入框，和 `/` 菜单一样按 Enter 才执行；需要任务名的会留一个空格，补完后回车。
 
 客户端还会把宿主写死的两个占位文案做兼容覆盖：问题卡片的自定义输入「输入你的答案」→「请输入」，
 会话输入框 →「请输入自定义语义」，`/harness-cli` 的命令输入提示也改为「请输入自定义语义」。
@@ -508,8 +573,13 @@ codex mcp list
 颜色只用主题令牌，深浅色自动跟随。客户端半边由页面在启动时加载，装好后需要刷新页面。
 
 以及**一条**聚合斜杠命令：`/harness-cli [子指令] [参数...]`。
-不带子指令时弹窗让你选（初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 推进度 / 继续任务 / 重跑任务 / UI 设计 / 数据库设计 / 删除任务 / 业务 wiki / 任务总览 / 入口地图 / 帮助），
+不带子指令时弹窗让你选（初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 继续任务 / 重跑任务 / UI 设计 / 数据库设计 / 删除任务 / 业务 wiki / 任务总览 / 入口地图 / 帮助；「推进度」不在菜单里，仍可直接写 `/harness-cli progress`），
 选中后执行对应动作；也可以直接写子指令，例如 `/harness-cli check`、`/harness-cli plan 登录页面 --confirm`。
+
+选「帮助」或直接写 `/harness-cli help` 时会先弹一个**非必选**的选择框，选项是指令后缀（`delete` / `page` / `plan` /
+`progress` …，含不在菜单里的 `progress`）：选中 `delete` 就执行 `/harness-cli help delete`，只看 delete 的说明；
+选择链会并进结果卡片顶部（`已选择：帮助 → delete`），不再单独发「已选择」消息；
+跳过 / 取消则回到完整帮助。`/harness-cli help process` 直接看完整流程。
 
 | 子指令 | 作用 | 交互 |
 |---|---|---|
@@ -519,9 +589,11 @@ codex mcp list
 | `/harness-cli delete [任务名...]` | 删除任务：多选后删除任务页 / 方案 / UI / 数据模型 / 规范文档 / 复盘；进行中的任务先发停止指令再删 | 多选弹窗（不可恢复）；显式任务名保留一次确认 |
 
 从菜单选「任务总览」会自动带上 `serve`，并弹一个**非必填**的端口输入框：跳过=随机端口，填数字=固定端口。
-`page` / `plan` 采用两阶段执行：先完成任务名与设计选择（先问「要不要创建数模设计」，再问
-「要不要生成 UI 设计稿」），再开始执行；选择数模 / UI 时在同一次处理里依次执行 `page/plan`、`sql`、`ui`。
-`plan` 的自动开工也会等到 `sql` / `ui` 完成后才发起；
+`page` 采用两阶段执行：先完成任务名与附加产物选择，再开始执行。问题顺序固定为：
+**先问要不要生成 UX**；选了 UX 就问「要不要根据刚才的 UX 报告生成数据库设计」，没选就问「要不要创建数模设计」；
+最后问 UI——前面选了 UX / 数模 / 两者之一时问「要不要关联前面的文档生成 UI」，否则问「要不要生成 UI」。
+选择后在同一次处理里依次执行 `page` → `ux`（含 `--apply` 回写 design.md）→ `sql` → `ui`。
+`plan` 不再追问这些附加产物，只写 `docs/specs`；未开工时文档写完后自动开工，已开工 / 已确认时只更新文档、不触发执行；
 所有从菜单发起的指令，结果开头都会写 `已执行 /harness-cli <子指令>`，在对话里可追溯。
 任务名后面的说明会自动进 `--user-words`（`/harness-cli plan 登录页面 添加最小6位最大8位的限制`）；
 如果整句都被当成了任务名（含标点/空格），会弹窗要一个短名字，原句仍作为需求写进文档。
@@ -539,7 +611,7 @@ codex mcp list
 卸载：删掉 `cordis.patch.yml` 里那段 `- insert:`（`id: harness-cli`），重启 DSH。
 工具本身不受影响——命令行仍然可用。
 
-## 12. 开发
+## 13. 开发
 
 ```sh
 node --test                                  # 197 个用例

@@ -55,7 +55,7 @@ const DEFAULT_PATHS = {
  * - 单次运行可用 `--update` / `--keep` / `--ask` 覆盖。
  */
 const DEFAULT_WIKI = {
-  mode: 'ask',
+  mode: 'merge',
 };
 
 const DEFAULT_CLAIMS = {
@@ -232,8 +232,8 @@ function validateConfig(config) {
   need(isPlainObject(wiki), 'config.wiki 必须是对象');
   if (isPlainObject(wiki)) {
     need(
-      wiki.mode === undefined || ['ask', 'auto', 'keep'].includes(wiki.mode),
-      'config.wiki.mode 只能是 ask / auto / keep'
+      wiki.mode === undefined || ['merge', 'ask', 'auto', 'keep'].includes(wiki.mode),
+      'config.wiki.mode 只能是 merge / auto / keep（ask 为旧名，等价于 merge）'
     );
   }
 

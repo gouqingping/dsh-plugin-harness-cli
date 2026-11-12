@@ -39,7 +39,13 @@
 
 ## 4. 范围边界
 
+{{#if docs.scopeOut}}
+{{#each docs.scopeOut}}- {{this}}
+{{/each}}
+{{/if}}
+{{#unless docs.scopeOut}}
 待业务确认：本清单明确不包含的能力，以及由其他系统承接的部分。
+{{/unless}}
 
 ## 5. 复用关系
 

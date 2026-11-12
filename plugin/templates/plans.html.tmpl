@@ -98,6 +98,7 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
       <span class="tag tag-default" id="live-state">静态快照</span>
+      {{#if uxPage}}<button class="btn" id="ux-overview" title="整体 UX 与需求分析报告">整体 UX</button>{{/if}}
       {{#if dbPage}}<button class="btn" id="db-overview" title="整体数模设计图（可拖动调整布局）">整体数模图</button>{{/if}}
       <button class="btn" id="reload">刷新</button>
     </div>
@@ -288,7 +289,7 @@
   }
 
   function taskSignature(task) {
-    return [task.name, task.total, task.status, task.updated, task.hasUi, task.hasDb].join('|');
+    return [task.name, task.total, task.status, task.updated, task.hasUi, task.hasDb, task.hasUx].join('|');
   }
 
   function rowForName(name) {
@@ -322,6 +323,7 @@
         changed.push(task.name);
         if (Boolean(prev.hasUi) !== Boolean(task.hasUi)) assetChanged = true;
         if (Boolean(prev.hasDb) !== Boolean(task.hasDb)) assetChanged = true;
+        if (Boolean(prev.hasUx) !== Boolean(task.hasUx)) assetChanged = true;
       });
     }
     TASKS = next;
@@ -358,6 +360,7 @@
         '<button class="btn btn-sm" data-chat="' + index + '">对话</button> ' +
         (task.hasUi ? '<button class="btn btn-sm" data-ui="' + index + '">UI</button> ' : '') +
         (task.hasDb ? '<button class="btn btn-sm" data-db="' + index + '">数模</button> ' : '') +
+        (task.hasUx ? '<button class="btn btn-sm" data-ux="' + index + '">UX</button> ' : '') +
         '<button class="btn btn-sm" data-rerun="' + index + '">重跑</button> ' +
         '<button class="btn btn-sm btn-danger" data-delete="' + index + '">删除</button>' +
       '</td>' +
@@ -454,6 +457,30 @@
     var relative = 'prototype/' + encodeURIComponent(task.name) + '/db/index.html';
     var url = ONLINE ? '/' + relative : relative;
     document.getElementById('modal-title').textContent = task.name + ' · 数模图';
+    document.getElementById('modal-open').href = url;
+    showSkeleton('preview-skeleton');
+    document.getElementById('modal-frame').src = url;
+    document.getElementById('modal').classList.add('is-open');
+  }
+
+  /** 单任务 UX 报告：复用同一个弹窗。 */
+  function previewUx(index) {
+    var task = taskOf(index);
+    if (!task || !task.hasUx) return;
+    var relative = 'prototype/' + encodeURIComponent(task.name) + '/ux/index.html';
+    var url = ONLINE ? '/' + relative : relative;
+    document.getElementById('modal-title').textContent = task.name + ' · UX 与需求分析';
+    document.getElementById('modal-open').href = url;
+    showSkeleton('preview-skeleton');
+    document.getElementById('modal-frame').src = url;
+    document.getElementById('modal').classList.add('is-open');
+  }
+
+  /** 整体 UX 报告：覆盖全部任务的项目级分析页。 */
+  function previewUxOverview() {
+    if (!DATA.uxPage) return;
+    var url = ONLINE ? '/' + DATA.uxPage : DATA.uxPage;
+    document.getElementById('modal-title').textContent = '整体 UX 与需求分析报告';
     document.getElementById('modal-open').href = url;
     showSkeleton('preview-skeleton');
     document.getElementById('modal-frame').src = url;
@@ -689,6 +716,10 @@
   }
 
   document.getElementById('reload').addEventListener('click', function () { location.reload(); });
+  var uxOverviewBtn = document.getElementById('ux-overview');
+  if (uxOverviewBtn) {
+    uxOverviewBtn.addEventListener('click', function () { previewUxOverview(); });
+  }
   var dbOverviewBtn = document.getElementById('db-overview');
   if (dbOverviewBtn) {
     dbOverviewBtn.addEventListener('click', function () { previewDbOverview(); });
@@ -750,6 +781,11 @@
     if (ds.db !== undefined) {
       event.preventDefault();
       previewDb(ds.db);
+      return;
+    }
+    if (ds.ux !== undefined) {
+      event.preventDefault();
+      previewUx(ds.ux);
       return;
     }
     if (ds.previewDoc !== undefined) {

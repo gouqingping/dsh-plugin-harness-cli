@@ -10,7 +10,7 @@
 
 - 技术栈：JavaScript
 - 运行环境：Node.js >= 18（零运行时依赖）
-- 版本：0.1.5
+- 版本：0.1.6-rc
 
 ## 2. 目录地图
 
@@ -104,6 +104,7 @@
 - 工具说明与用法：`README.md`
 - 设计决策（零依赖 / docs 功能清单 / _VERSIONS / 状态文件保护）：`docs/adr/ADR-0001-harness-cli.md`
 - Codex 插件设计（双适配层、单业务核心、本地 MCP）：`docs/adr/ADR-0002-codex-plugin.md`
+- UX 分析（全项目报告 + 缺口生命周期 + 关联同步）：`docs/adr/ADR-0003-ux-analysis.md`
 - 模板目录（生成物文案的唯一真源）：`plugin/templates/`
 
 > 本文件超过 120 行说明写成了手册。超出部分拆到 `docs/`，在这里只留链接。

@@ -30,6 +30,7 @@ const EXPECTED_TOOLS = [
   'harness_cli_sql',
   'harness_cli_style',
   'harness_cli_ui',
+  'harness_cli_ux',
   'harness_cli_wiki',
 ];
 
@@ -130,7 +131,7 @@ test('Codex 清单、技能、MCP 与 Git 市场相互引用', () => {
   assert.strictEqual(pkg.main, 'plugin/cordis.mjs', 'Codex 支持不能改变 DSH 主入口');
 });
 
-test('Codex MCP 暴露 13 个与 DSH 同名的工具，并要求显式 root', async (t) => {
+test('Codex MCP 暴露 14 个与 DSH 同名的工具，并要求显式 root', async (t) => {
   const client = createMcpClient(t);
   const initialized = await client.request('initialize', {
     protocolVersion: '2025-06-18',

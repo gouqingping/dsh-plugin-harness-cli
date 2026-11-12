@@ -62,12 +62,6 @@ _ModuleLoader__.load({
         needsArg: true,
       },
       {
-        name: 'harness-cli progress',
-        label: '推进度',
-        desc: '记录步骤与状态，同步任务总览',
-        needsArg: true,
-      },
-      {
         name: 'harness-cli continue',
         label: '继续任务',
         desc: '选择未完成任务，从当前进度继续',
@@ -77,6 +71,12 @@ _ModuleLoader__.load({
         name: 'harness-cli restart',
         label: '重跑任务',
         desc: '多选任务：进度归零后从 Step 1 重跑',
+        needsArg: false,
+      },
+      {
+        name: 'harness-cli ux',
+        label: 'UX 分析',
+        desc: '多选任务或自定义需求，生成 UX 报告',
         needsArg: false,
       },
       {

@@ -52,6 +52,7 @@ const NAMES = {
   dbPage: 'db-page.html.tmpl',
   dbOverview: 'prototype-db-overview.html.tmpl',
   wikiDomain: 'wiki-domain.md.tmpl',
+  uxReport: 'ux-report.html.tmpl',
   claimsReadme: 'claims-README.md.tmpl',
   claimScript: 'claim.js.tmpl',
 };

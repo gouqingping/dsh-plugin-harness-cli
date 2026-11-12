@@ -9,7 +9,13 @@
 
 ## 2. 它解决什么问题
 
+{{#if docs.why}}
+{{#each docs.why}}- {{this}}
+{{/each}}
+{{/if}}
+{{#unless docs.why}}
 {{#if project.positioning}}上面这句话就是本项目的目标；落地时它对应的现场问题如下。{{/if}}{{#unless project.positioning}}待业务确认：目标用户现在最痛的三件事，以及不做会付出什么代价。{{/unless}}
+{{/unless}}
 
 ## 3. 能力全景
 
@@ -47,7 +53,14 @@
 
 ## 6. 边界（明确不做的事）
 
+{{#if docs.scopeOut}}
+- 明确不做（来自任务提案）：
+{{#each docs.scopeOut}}  - {{this}}
+{{/each}}
+{{/if}}
+{{#unless docs.scopeOut}}
 - 待业务确认：本项目明确不覆盖的业务范围。
+{{/unless}}
 - 待业务确认：明确不承接的需求类型。
 - 待业务确认：不承诺的服务等级（响应时间、可用性等）。
 

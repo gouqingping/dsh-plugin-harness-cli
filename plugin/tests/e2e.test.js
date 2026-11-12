@@ -110,6 +110,26 @@ test('init 幂等：第二次不覆盖已有文件', () => {
   assert.strictEqual(fs.readFileSync(agents, 'utf8'), before, 'init 覆盖了已有文件');
 });
 
+test('help process：查看完整任务流程（含别名）', () => {
+  const dir = repo(['--preset', 'prototype']);
+  const res = run(['help', 'process'], dir);
+  assert.strictEqual(res.code, 0, res.err);
+  for (const stage of [
+    '选操作模式',
+    '初始化骨架',
+    '建任务',
+    '复盘',
+    '方案确认',
+    '执行与推进度',
+    '验收与门禁',
+    '收尾与运维',
+  ]) {
+    assert.match(res.out, new RegExp(stage));
+  }
+  assert.strictEqual(run(['help', '流程'], dir).out, res.out);
+  assert.match(run(['help'], dir).out, /help process/);
+});
+
 test('默认 wipLimit=1：两个 in_progress 触发 F107 失败', () => {
   const dir = repo();
   setStatuses(dir, ['in_progress', 'in_progress']);
@@ -405,16 +425,17 @@ test('wiki：首次生成 13 篇，二次运行不重复写', () => {
   assert.match(second.out, /已写入 0 篇/);
 });
 
-test('wiki：人工改受管区块报冲突；--keep 保留、--update 覆盖', () => {
+test('wiki：人工改受管区块默认增量合并；--keep 不动、--update 重写', () => {
   const dir = repo();
   assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
 
   const file = path.join(dir, 'docs/wiki/术语表.md');
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('## 1. 体系与文件', '## 1. 体系与文件（人工改名）'));
 
-  const conflict = run(['wiki', '--root', dir], dir);
-  assert.strictEqual(conflict.code, 1);
-  assert.match(conflict.out, /CONFLICT/);
+  const merged = run(['wiki', '--root', dir], dir);
+  assert.strictEqual(merged.code, 0, `${merged.out}${merged.err}`);
+  assert.doesNotMatch(merged.out, /CONFLICT/);
+  assert.match(fs.readFileSync(file, 'utf8'), /人工改名/);
 
   const keep = run(['wiki', '--keep', '--root', dir], dir);
   assert.strictEqual(keep.code, 0, keep.out);
@@ -437,41 +458,37 @@ test('wiki：受管区块外的人工内容不被覆盖', () => {
   assert.match(fs.readFileSync(file, 'utf8'), /人工补充：现场约定 X/);
 });
 
-test('wiki：既有文档没有受管区块时，--update 补区块并原样保留正文', () => {
+test('wiki：既有文档没有受管区块时，默认补区块并原样保留正文', () => {
   const dir = repo();
   assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
   const file = path.join(dir, 'docs/wiki/一页纸速览.md');
   fs.writeFileSync(file, '# 一页纸速览（人工版）\n\n人工写的第一段。\n\n- 人工要点一\n');
 
-  // 非交互默认模式：不覆盖，但必须如实报告这是「可接管」而不是「已补全」
-  const ask = run(['wiki', '--root', dir], dir);
-  assert.strictEqual(ask.code, 1);
-  assert.match(ask.out, /--update 会补区块/);
-  assert.doesNotMatch(ask.out, /13 篇已按当前仓库补全/);
-  assert.match(fs.readFileSync(file, 'utf8'), /人工写的第一段/);
-
-  const check = run(['wiki', '--check', '--root', dir], dir);
-  assert.match(check.out, /待接管/);
-
-  // --update 接管：补上受管区块，人工正文一个字都不改
-  const update = run(['wiki', '--update', '--root', dir], dir);
-  assert.strictEqual(update.code, 0, `${update.out}${update.err}`);
+  const adopt = run(['wiki', '--root', dir], dir);
+  assert.strictEqual(adopt.code, 0, `${adopt.out}${adopt.err}`);
+  assert.match(adopt.out, /ADOPT/);
   const text = fs.readFileSync(file, 'utf8');
   assert.ok(text.includes('<!-- harness-wiki:begin -->'), '应补上受管区块');
   assert.match(text, /^# 一页纸速览（人工版）/m);
   assert.match(text, /人工写的第一段/);
   assert.match(text, /人工要点一/);
 
-  // 接管后回到正常维护：再跑一次既无冲突、也不重复写
+  const check = run(['wiki', '--check', '--root', dir], dir);
+  assert.strictEqual(check.code, 0, check.out);
+  assert.match(check.out, /全部为最新/);
+
+  // 接管后回到正常维护：再跑一次既不改原文、也不重复写
   const again = run(['wiki', '--root', dir], dir);
   assert.strictEqual(again.code, 0, again.out);
   assert.match(again.out, /已写入 0 篇/);
+  assert.match(fs.readFileSync(file, 'utf8'), /人工写的第一段/);
 });
 
-test('wiki：全部文档都没有受管区块时，输出不许说成「已补全」', () => {
+test('wiki：全部文档都没有受管区块时，默认逐篇补区块并保留原文', () => {
   const dir = repo();
   assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
   const wikiDir = path.join(dir, 'docs/wiki');
+  const originals = new Map();
   for (const name of fs.readdirSync(wikiDir)) {
     if (!name.endsWith('.md')) continue;
     const file = path.join(wikiDir, name);
@@ -479,12 +496,21 @@ test('wiki：全部文档都没有受管区块时，输出不许说成「已补�
       .split('\n')
       .filter((line) => !/harness-wiki:(begin|end)/.test(line))
       .join('\n');
+    originals.set(name, stripped);
     fs.writeFileSync(file, stripped);
   }
+
   const res = run(['wiki', '--root', dir], dir);
-  assert.strictEqual(res.code, 1);
-  assert.match(res.out, /没有写入任何文档/);
-  assert.doesNotMatch(res.out, /已按当前仓库补全/);
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /已写入 13 篇/);
+  assert.doesNotMatch(res.out, /冲突/);
+  for (const [name, original] of originals) {
+    const text = fs.readFileSync(path.join(wikiDir, name), 'utf8');
+    assert.ok(text.includes('<!-- harness-wiki:begin -->'), `${name} 应补上受管区块`);
+    // 原文的关键内容必须还在（区块外）
+    const marker = original.trim().split('\n').find((line) => line.startsWith('## '));
+    if (marker) assert.ok(text.includes(marker), `${name} 的原文应保留`);
+  }
 });
 
 test('wiki：受管区块标记不完整时不硬写、不崩溃', () => {
@@ -555,7 +581,7 @@ test('wiki：内容来自实际文件（功能编号、并行上限），dry-run
   assert.match(rules, /并行上限 1/);
 });
 
-test('check：docs/wiki 过期或冲突时给 H109 警告', () => {
+test('check：docs/wiki 过期或标记损坏时给 H109 警告', () => {
   const dir = repo();
   assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
   const fresh = run(['check', '--root', dir], dir);
@@ -569,11 +595,20 @@ test('check：docs/wiki 过期或冲突时给 H109 警告', () => {
   const stale = run(['check', '--root', dir], dir);
   assert.match(stale.out, /H109[\s\S]*已过期/);
 
-  // 人工改受管区块 → 冲突
+  // 重跑 wiki 刷新事实
+  assert.strictEqual(run(['wiki', '--root', dir], dir).code, 0);
+
+  // 人工改写段落：增量合并会保留，不再算冲突
   const file = path.join(dir, 'docs/wiki/术语表.md');
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('## 1. 体系与文件', '## 1. 人工改名'));
+  const edited = run(['check', '--root', dir], dir);
+  assert.match(edited.out, /H109\s+docs\/wiki 与事实一致/);
+  assert.doesNotMatch(edited.out, /冲突/);
+
+  // 受管区块标记坏了才是真冲突
+  fs.writeFileSync(file, '# 术语表\n\n<!-- harness-wiki:begin -->\n没有结束标记。\n');
   const conflict = run(['check', '--root', dir], dir);
-  assert.match(conflict.out, /H109[\s\S]*冲突/);
+  assert.match(conflict.out, /H109[\s\S]*标记不完整/);
 });
 
 function reviewAndConfirm(dir, task) {
@@ -900,6 +935,43 @@ test('progress：方案未确认也能记录，只提示 check 仍会红', () =>
   assert.match(res.out, /方案未确认（check 的 P21 仍是红项）/);
   const html = fs.readFileSync(path.join(dir, 'prototype/task-demo/progress.html'), 'utf8');
   assert.match(html, /data-pct="40"/);
+});
+
+test('progress 页：每个任务都有步骤流程，当前步骤高亮由页面脚本生成', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'task-demo', '--root', dir], dir).code, 0);
+
+  const html = fs.readFileSync(path.join(dir, 'prototype/task-demo/progress.html'), 'utf8');
+  assert.match(html, /<section class="flow">/);
+  assert.match(html, /<h2>步骤流程<\/h2>/);
+  assert.match(html, /data-flow-summary/);
+  assert.match(html, /data-flow-stage/);
+  assert.match(html, /<ol class="flow-track" data-flow/);
+  assert.match(html, /<script data-progress-flow>/);
+  assert.match(html, /is-current/);
+  assert.match(html, /flow-current/);
+  // 流程从任务规划的步骤卡片生成，而不是另存一份
+  assert.match(html, /querySelectorAll\('li\.step'\)/);
+});
+
+test('progress：老任务页缺步骤流程时自动补上', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'old-task', '--root', dir], dir).code, 0);
+  const file = path.join(dir, 'prototype/old-task/progress.html');
+  const legacy = fs
+    .readFileSync(file, 'utf8')
+    .replace(/<section class="flow">[\s\S]*?<\/section>/, '')
+    .replace(/<script data-progress-flow>[\s\S]*?<\/script>/, '');
+  assert.doesNotMatch(legacy, /data-flow/);
+  fs.writeFileSync(file, legacy);
+
+  const res = run(['progress', 'old-task', '--step', '1', '--pct', '50', '--root', dir], dir);
+  assert.strictEqual(res.code, 0, res.err);
+  assert.match(res.out, /已补「步骤流程」区块/);
+  const html = fs.readFileSync(file, 'utf8');
+  assert.match(html, /data-flow/);
+  assert.match(html, /data-progress-flow/);
+  assert.match(html, /data-pct="50"/);
 });
 
 test('progress：确认后改步骤/状态，自动追加记录并同步总览', () => {
@@ -2105,4 +2177,152 @@ test('progress 方案预览弹窗；plan 流程图源文件弹窗预览', () => 
   assert.match(plan, /id="flow-doc-body"/);
   assert.match(plan, /docs\/specs\/preview-task\/flow\.md/);
   assert.match(plan, /点击预览/);
+});
+
+test('ux：自定义需求生成 HTML 报告、结构化数据与缺口清单', () => {
+  const dir = repo();
+  const res = run(
+    ['ux', '--user-words', '做一个审批流，管理员可以批量审批。体验要快，什么算做成：批量审批成功。', '--root', dir],
+    dir
+  );
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /prototype\/ux\.html/);
+
+  const html = fs.readFileSync(path.join(dir, 'prototype/ux.html'), 'utf8');
+  assert.match(html, /UX 与需求分析报告/);
+  assert.match(html, /批量审批/);
+  assert.doesNotMatch(html, /\{\{/);
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/ux.json')));
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/.ux-gaps.json')));
+});
+
+test('ux：任务分析列出阻断缺口，--apply 写回 design.md', () => {
+  const dir = repo();
+  assert.strictEqual(run(['page', '登录页面', '--root', dir], dir).code, 0);
+
+  const res = run(['ux', '登录页面', '--root', dir], dir);
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /UX 分析仍需补全/);
+
+  const apply = run(['ux', '--apply', '登录页面', '--root', dir], dir);
+  assert.strictEqual(apply.code, 0, `${apply.out}${apply.err}`);
+  const design = fs.readFileSync(path.join(dir, 'docs/specs/登录页面/design.md'), 'utf8');
+  assert.match(design, /<!-- ux-report:begin -->/);
+  assert.match(design, /UX 复核/);
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/ux.html')), '应有全量报告');
+  assert.ok(fs.existsSync(path.join(dir, 'prototype/登录页面/ux/index.html')), '应有单任务报告');
+
+  // 再跑一次 --apply 不重复写
+  const again = run(['ux', '--apply', '登录页面', '--root', dir], dir);
+  assert.strictEqual(again.code, 0, again.out);
+  assert.match(again.out, /未变化 1 个/);
+});
+
+test('ux：整体报告覆盖全部任务，项目需求持久化到 docs/ux/requirements.md', () => {
+  const dir = repo();
+  assert.strictEqual(run(['page', '任务甲', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['page', '任务乙', '--root', dir], dir).code, 0);
+
+  const res = run(
+    ['ux', '任务甲', '--user-words', '做一个审批流，管理员可以批量审批。什么算做成：批量审批成功。', '--root', dir],
+    dir
+  );
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /整体报告/);
+  assert.match(res.out, /全部 2 个任务/);
+  assert.ok(fs.existsSync(path.join(dir, 'docs/ux/requirements.md')), '项目需求应落盘');
+
+  const html = fs.readFileSync(path.join(dir, 'prototype/ux.html'), 'utf8');
+  assert.match(html, /任务甲/);
+  assert.match(html, /任务乙/, '只选一个任务时整体报告仍要覆盖全部任务');
+  assert.match(html, /批量审批/);
+
+  // 第二次不再传需求，项目需求仍从 docs/ux/requirements.md 读取
+  assert.strictEqual(run(['ux', '--root', dir], dir).code, 0);
+  const again = fs.readFileSync(path.join(dir, 'prototype/ux.html'), 'utf8');
+  assert.match(again, /批量审批/);
+  assert.match(again, /项目需求 2 条/);
+});
+
+test('ux --resolve：逐条关闭后从待确认清单移除，重跑仍保持关闭', () => {
+  const dir = repo();
+  assert.strictEqual(run(['page', '登录页面', '--root', dir], dir).code, 0);
+  assert.strictEqual(run(['ux', '登录页面', '--root', dir], dir).code, 0);
+
+  const gapsFile = path.join(dir, 'prototype/.ux-gaps.json');
+  const before = readJson(gapsFile);
+  const target = before.gaps.find((gap) => gap.item.includes('主流程'));
+  assert.ok(target, JSON.stringify(before.gaps));
+
+  const res = run(['ux', '--resolve', target.id, '--by', '测试', '--root', dir], dir);
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /CLOSED/);
+  assert.match(res.out, /关闭 1 项/);
+
+  const store = readJson(path.join(dir, 'prototype/.ux-resolved.json'));
+  assert.strictEqual(store.resolved.length, 1);
+  assert.strictEqual(store.resolved[0].id, target.id);
+
+  const after = readJson(gapsFile);
+  assert.ok(!after.gaps.some((gap) => gap.id === target.id), '关闭后不再出现在清单');
+  assert.ok(after.resolved >= 1);
+
+  // 重跑 ux 仍保持关闭
+  assert.strictEqual(run(['ux', '--root', dir], dir).code, 0);
+  const rerun = readJson(gapsFile);
+  assert.ok(!rerun.gaps.some((gap) => gap.id === target.id));
+  assert.ok(rerun.resolvedGaps.some((gap) => gap.id === target.id));
+});
+
+test('ux：未知任务报 1，dry-run 不落盘', () => {
+  const dir = repo();
+  const dry = run(['ux', '--user-words', '做一个页面', '--dry-run', '--root', dir], dir);
+  assert.strictEqual(dry.code, 0, dry.out);
+  assert.ok(!fs.existsSync(path.join(dir, 'prototype/ux.html')), 'dry-run 不能创建报告');
+
+  const unknown = run(['ux', '不存在的任务', '--root', dir], dir);
+  assert.strictEqual(unknown.code, 1);
+  assert.match(`${unknown.out}${unknown.err}`, /没有找到任务/);
+});
+
+test('ux：plans.html 操作栏暴露单任务 UX 与整体 UX 预览入口', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'task-a', '--root', dir], dir).code, 0);
+
+  const before = fs.readFileSync(path.join(dir, 'plans.html'), 'utf8');
+  assert.doesNotMatch(before, /id="ux-overview"/, '没有 UX 报告时不应出现整体 UX 按钮');
+
+  assert.strictEqual(run(['ux', 'task-a', '--root', dir], dir).code, 0);
+
+  const plans = fs.readFileSync(path.join(dir, 'plans.html'), 'utf8');
+  assert.match(plans, /"hasUx":true/);
+  assert.match(plans, /"uxPage":"prototype\/ux\.html"/);
+  assert.match(plans, /id="ux-overview"/);
+  assert.match(plans, /data-ux/);
+  assert.match(plans, /整体 UX/);
+  assert.match(plans, /previewUxOverview/);
+});
+
+test('plan：已开工任务只写 docs/specs，不改任务页 / 方案页', () => {
+  const dir = repo(['--preset', 'prototype']);
+  assert.strictEqual(run(['page', 'task-a', '--root', dir], dir).code, 0);
+  assert.strictEqual(
+    run(['progress', 'task-a', '--step', '1', '--pct', '100', '--root', dir], dir).code,
+    0
+  );
+
+  const pageFile = path.join(dir, 'prototype/task-a/progress.html');
+  const planFile = path.join(dir, 'prototype/task-a/plan.html');
+  const pageBefore = fs.readFileSync(pageFile, 'utf8');
+  const planBefore = fs.readFileSync(planFile, 'utf8');
+
+  const res = run(['plan', 'task-a', '--force', '--root', dir], dir);
+  assert.strictEqual(res.code, 0, `${res.out}${res.err}`);
+  assert.match(res.out, /已开工 \/ 已确认的任务只动 docs\/specs/);
+  assert.strictEqual(fs.readFileSync(pageFile, 'utf8'), pageBefore);
+  assert.strictEqual(fs.readFileSync(planFile, 'utf8'), planBefore);
+  assert.match(
+    fs.readFileSync(path.join(dir, 'docs/specs/task-a/proposal.md'), 'utf8'),
+    /提案/
+  );
 });

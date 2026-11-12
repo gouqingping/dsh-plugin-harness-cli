@@ -87,6 +87,7 @@ function collectTasks(root, config) {
       updated: parsed.updated,
       hasUi: exists(path.join(dir, entry.name, 'ui', 'index.html')),
       hasDb: exists(path.join(dir, entry.name, 'db', 'index.html')),
+      hasUx: exists(path.join(dir, entry.name, 'ux', 'index.html')),
       docs,
     });
   }
@@ -106,13 +107,17 @@ function collectTasks(root, config) {
  */
 function renderPlans(root, config) {
   const tasks = collectTasks(root, config);
-  const dbFile = path.join(root, protoConfig(config).dir || 'prototype', 'db.html');
+  const proto = protoConfig(config).dir || 'prototype';
+  const dbFile = path.join(root, proto, 'db.html');
   const dbPage = exists(dbFile) ? toPosix(path.relative(root, dbFile)) : '';
-  const data = JSON.stringify({project: config.project.name, tasks, dbPage}).replace(/</g, '\\u003c');
+  const uxFile = path.join(root, proto, 'ux.html');
+  const uxPage = exists(uxFile) ? toPosix(path.relative(root, uxFile)) : '';
+  const data = JSON.stringify({project: config.project.name, tasks, dbPage, uxPage}).replace(/</g, '\\u003c');
   return render(loadTemplate('plans'), {
     project: {name: config.project.name},
     taskCount: tasks.length,
     dbPage,
+    uxPage,
     plansJson: data,
     nowIso: new Date().toISOString(),
   });
@@ -485,7 +490,7 @@ function servePlans(root, config, port) {
   let poller = null;
 
   const taskSignature = (tasks) =>
-    tasks.map((task) => [task.name, task.total, task.status, task.updated, task.hasUi].join('|')).join('\n');
+    tasks.map((task) => [task.name, task.total, task.status, task.updated, task.hasUi, task.hasUx].join('|')).join('\n');
   const eventBody = (tasks) => `data: ${JSON.stringify({tasks, generatedAt: new Date().toISOString()})}\n\n`;
   const broadcast = (force) => {
     const tasks = collectTasks(rootAbs, config);

@@ -63,7 +63,7 @@ test('模块导出 cordis 插件契约', async () => {
   assert.strictEqual(mod.name, 'harness-cli');
   assert.deepStrictEqual(mod.inject, ['tools']);
   assert.strictEqual(typeof mod.apply, 'function');
-  assert.strictEqual(mod.TOOL_SPECS.length, 13);
+  assert.strictEqual(mod.TOOL_SPECS.length, 14);
 });
 
 /** 取聚合指令并按子指令前缀调用（等价于 /harness-cli <sub> ...）。 */
@@ -144,7 +144,7 @@ test('harness_cli_delete：弹窗选「取消」时不动任何文件', async ()
   assert.ok(fs.existsSync(path.join(dir, 'prototype/task-demo')));
 });
 
-test('harness_cli_wiki：冲突时弹窗，选「接管」后补区块并保留正文', async () => {
+test('harness_cli_wiki：默认增量合并，不再为人工改动弹窗；无区块的文档自动补区块', async () => {
   const mod = await import('../cordis.mjs');
   const BIN = path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js');
   const dir = tmpRepo();
@@ -159,9 +159,7 @@ test('harness_cli_wiki：冲突时弹窗，选「接管」后补区块并保留�
     .join('\n');
   fs.writeFileSync(file, stripped);
 
-  const { ctx, tools } = fakeCtx({
-    userQuestions: fakeQuestions('接管既有文档'),
-  });
+  const { ctx, tools } = fakeCtx();
   mod.apply(ctx);
   const tool = tools.find((item) => item.name === 'harness_cli_wiki');
   const result = await tool.execute({}, fakeExec(dir));
@@ -276,6 +274,7 @@ test('apply 注册全部工具与斜杠命令', async () => {
     'harness_cli_sql',
     'harness_cli_style',
     'harness_cli_ui',
+    'harness_cli_ux',
     'harness_cli_wiki',
   ]);
   assert.deepStrictEqual(
@@ -532,8 +531,30 @@ test('/harness-cli help：列出全部命令与工具，并支持按名字查看
   assert.match(one.text, /harness_cli_ui/);
   assert.doesNotMatch(one.text, /harness_cli_wiki/);
 
+  const uxHelp = await help.handler({ rawInput: 'help ux' });
+  assert.match(uxHelp.text, /harness_cli_ux/);
+  assert.match(uxHelp.text, /prototype\/ux\.html/);
+
   const tool = await help.handler({ rawInput: 'help harness_cli_progress' });
   assert.match(tool.text, /harness_cli_progress/);
+
+  assert.match(full.text, /help process/);
+  const processHelp = await help.handler({ rawInput: 'help process' });
+  assert.match(processHelp.text, /完整流程/);
+  for (const stage of [
+    '选操作模式',
+    '初始化骨架',
+    '建任务',
+    '复盘',
+    '方案确认',
+    '执行与推进度',
+    '验收与门禁',
+    '收尾与运维',
+  ]) {
+    assert.match(processHelp.text, new RegExp(stage));
+  }
+  const flowAlias = await help.handler({ rawInput: 'help 流程' });
+  assert.strictEqual(flowAlias.text, processHelp.text);
 
   const missing = await help.handler({ rawInput: 'help nope' });
   assert.match(missing.text, /没有找到/);
@@ -542,11 +563,15 @@ test('/harness-cli help：列出全部命令与工具，并支持按名字查看
 test('/harness-cli：不带子指令时弹窗选中文项并执行', async () => {
   const mod = await import('../cordis.mjs');
   const asked = [];
+  let calls = 0;
   const { ctx, commands } = fakeCtx({
     userQuestions: {
       async ask(request) {
         asked.push(request);
-        return { answers: [{ id: 'harness-cli', selected: ['帮助'] }] };
+        calls += 1;
+        return calls === 1
+          ? { answers: [{ id: 'harness-cli', selected: ['帮助'] }] }
+          : { answers: [{ id: 'harness-cli', selected: [] }] };
       },
     },
   });
@@ -558,7 +583,7 @@ test('/harness-cli：不带子指令时弹窗选中文项并执行', async () =>
   });
 
   assert.strictEqual(res.kind, 'success', res.text);
-  assert.strictEqual(asked.length, 1, '应弹一次选择框');
+  assert.strictEqual(asked.length, 2, '选帮助后再弹一次指令选择框');
   const question = asked[0].questions[0];
   assert.strictEqual(question.header, 'Harness-CLI 指令');
   assert.strictEqual(question.question, '选择要执行的 Harness-CLI 指令：');
@@ -571,9 +596,9 @@ test('/harness-cli：不带子指令时弹窗选中文项并执行', async () =>
       '建任务',
       '方案',
       '复盘',
-      '推进度',
       '继续任务',
       '重跑任务',
+      'UX 分析',
       'UI 设计',
       '数据库设计',
       '删除任务',
@@ -585,6 +610,119 @@ test('/harness-cli：不带子指令时弹窗选中文项并执行', async () =>
   );
   // 选「帮助」→ 走 help 子指令
   assert.match(res.text, /harness_cli_progress/);
+});
+
+test('/harness-cli help：弹出所有指令选择框，选中看说明 / 跳过看完整帮助', async () => {
+  const mod = await import('../cordis.mjs');
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        const options = request.questions[0].options.map((item) => item.label);
+        assert.ok(options.includes('完整帮助'), '选择框要有跳过项');
+        for (const sub of ['delete', 'page', 'plan', 'progress', 'help']) {
+          assert.ok(options.includes(sub), `选项应是指令后缀 ${sub}`);
+        }
+        assert.ok(!options.includes('删除任务'), '选项不再用中文标签');
+        return { answers: [{ id: 'harness-cli', selected: ['check'] }] };
+      },
+    },
+  });
+  mod.apply(ctx);
+  const help = commandFor(commands, 'help');
+  const dir = tmpRepo();
+
+  const res = await help.handler({
+    rawInput: '',
+    agent: { session: { header: { cwd: dir } } },
+  });
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.match(res.text, /^已选择：帮助 → check\n\n\/harness-cli help check/);
+  assert.match(res.text, /\/harness-cli check/);
+  assert.match(res.text, /只读校验/);
+  assert.match(res.text, /harness_cli_check/);
+  assert.match(res.text, /help process/);
+});
+
+test('/harness-cli help：菜单选帮助再选 delete，执行的是 help delete', async () => {
+  const mod = await import('../cordis.mjs');
+  const asked = [];
+  const answers = [
+    { answers: [{ id: 'harness-cli', selected: ['帮助'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['delete'] }] },
+  ];
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        asked.push(request);
+        return answers.shift();
+      },
+    },
+  });
+  mod.apply(ctx);
+  const cli = commands.find((command) => command.name === 'harness-cli');
+  const res = await cli.handler({
+    rawInput: '',
+    agent: { session: { header: { cwd: tmpRepo() } } },
+  });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(asked.length, 2, '菜单 → 帮助 → 指令后缀');
+  assert.match(res.text, /^已选择：帮助 → delete/);
+  assert.match(res.text, /\/harness-cli help delete/);
+  assert.match(res.text, /\/harness-cli delete/);
+  assert.match(res.text, /删除任务页/);
+});
+
+test('/harness-cli help：选择框取消后回退到完整帮助', async () => {
+  const mod = await import('../cordis.mjs');
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask() {
+        return { answers: [{ id: 'harness-cli', selected: [] }] };
+      },
+    },
+  });
+  mod.apply(ctx);
+  const help = commandFor(commands, 'help');
+  const res = await help.handler({
+    rawInput: '',
+    agent: { session: { header: { cwd: tmpRepo() } } },
+  });
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.match(res.text, /子指令（\d+）/);
+  assert.match(res.text, /harness_cli_progress/);
+});
+
+test('/harness-cli progress：菜单收起后仍能直接调用', async () => {
+  const mod = await import('../cordis.mjs');
+  const { ctx, commands } = fakeCtx();
+  mod.apply(ctx);
+  const cli = commands.find((command) => command.name === 'harness-cli');
+  const dir = tmpRepo();
+  execFileSync(
+    process.execPath,
+    [
+      path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js'),
+      'page',
+      'task-demo',
+      '--root',
+      dir,
+    ],
+    { cwd: dir, encoding: 'utf8' },
+  );
+
+  const res = await cli.handler({
+    rawInput: 'progress task-demo --step 1 --pct 50',
+    agent: { session: { header: { cwd: dir } } },
+  });
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.match(
+    fs.readFileSync(
+      path.join(dir, 'prototype', 'task-demo', 'progress.html'),
+      'utf8',
+    ),
+    /data-pct="50"/,
+  );
 });
 
 test('/harness-cli：没有选择框时给出原因与子指令写法，不泄漏内部提示', async () => {
@@ -608,6 +746,7 @@ test('/harness-cli：选到需要参数的子指令时，再弹一次输入框�
     { answers: [{ id: 'harness-cli', selected: ['建任务'] }] },
     { answers: [{ id: 'harness-cli', selected: [], custom: '登录页面' }] },
     { answers: [{ id: 'harness-cli', selected: ['手动'] }] }, // 操作模式
+    { answers: [{ id: 'harness-cli', selected: ['先不用'] }] }, // UX 分析
     { answers: [{ id: 'harness-cli', selected: ['先不用'] }] }, // 数模设计
     { answers: [{ id: 'harness-cli', selected: ['先不用'] }] }, // UI 设计
   ];
@@ -630,8 +769,8 @@ test('/harness-cli：选到需要参数的子指令时，再弹一次输入框�
   assert.strictEqual(res.kind, 'success', res.text);
   assert.strictEqual(
     asked.length,
-    5,
-    '选指令 → 填任务名 → 问模式 → 问数模 → 问 UI',
+    6,
+    '选指令 → 填任务名 → 问模式 → 问 UX → 问数模 → 问 UI',
   );
   const second = asked[1].questions[0];
   assert.strictEqual(second.header, '任务名');
@@ -641,8 +780,9 @@ test('/harness-cli：选到需要参数的子指令时，再弹一次输入框�
   );
   assert.match(second.question, /登录页面/);
   assert.strictEqual(asked[2].questions[0].header, '操作模式');
-  assert.strictEqual(asked[3].questions[0].header, '数模设计');
-  assert.strictEqual(asked[4].questions[0].header, 'UI 设计');
+  assert.strictEqual(asked[3].questions[0].header, 'UX 分析');
+  assert.strictEqual(asked[4].questions[0].header, '数模设计');
+  assert.strictEqual(asked[5].questions[0].header, 'UI 设计');
   assert.ok(
     fs.existsSync(path.join(dir, 'prototype', '登录页面', 'progress.html')),
     '应按输入的任务名建页',
@@ -790,6 +930,7 @@ test('/harness-cli：先选是否生成 UI，再一起执行 page 与 ui', async
     { answers: [{ id: 'harness-cli', selected: ['建任务'] }] },
     { answers: [{ id: 'harness-cli', selected: [], custom: '登录页面' }] },
     { answers: [{ id: 'harness-cli', selected: ['手动'] }] }, // 操作模式
+    { answers: [{ id: 'harness-cli', selected: ['先不用'] }] }, // UX 分析
     { answers: [{ id: 'harness-cli', selected: ['先不用'] }] }, // 数模设计
     { answers: [{ id: 'harness-cli', selected: ['生成 UI 设计稿'] }] }, // UI 设计
   ];
@@ -797,7 +938,7 @@ test('/harness-cli：先选是否生成 UI，再一起执行 page 与 ui', async
     userQuestions: {
       async ask(request) {
         asked.push(request);
-        if (asked.length === 5) {
+        if (asked.length === 6) {
           pageExistedAtUiChoice = fs.existsSync(
             path.join(dir, 'prototype', '登录页面', 'progress.html'),
           );
@@ -828,6 +969,11 @@ test('/harness-cli：先选是否生成 UI，再一起执行 page 与 ui', async
   const agent = {
     session: {
       header: { cwd: dir },
+      // 已有 system head 的会话：选择反馈应照常追加。
+      surface: { nodes: [0] },
+      eventAt() {
+        return { type: 'system/message' };
+      },
       append(type, message, options) {
         feedback.push({ type, message, options });
         const text = message.content.map((block) => block.text || '').join('');
@@ -843,13 +989,14 @@ test('/harness-cli：先选是否生成 UI，再一起执行 page 与 ui', async
   assert.strictEqual(res.kind, 'success', res.text);
   assert.strictEqual(
     asked.length,
-    5,
-    '选指令 → 填任务名 → 问模式 → 问数模 → 问 UI',
+    6,
+    '选指令 → 填任务名 → 问模式 → 问 UX → 问数模 → 问 UI',
   );
   assert.match(asked[2].questions[0].header, /模式/);
-  assert.match(asked[3].questions[0].header, /数模/);
-  assert.match(asked[4].questions[0].header, /UI/);
-  assert.match(asked[4].questions[0].question, /登录页面/);
+  assert.match(asked[3].questions[0].header, /UX/);
+  assert.match(asked[4].questions[0].header, /数模/);
+  assert.match(asked[5].questions[0].header, /UI/);
+  assert.match(asked[5].questions[0].question, /登录页面/);
   assert.strictEqual(
     pageExistedAtUiChoice,
     false,
@@ -866,6 +1013,7 @@ test('/harness-cli：先选是否生成 UI，再一起执行 page 与 ui', async
       '已选择：建任务',
       '已输入：登录页面',
       '已选择：手动',
+      '已选择：先不用',
       '已选择：先不用',
       '已选择：生成 UI 设计稿',
     ],
@@ -887,27 +1035,86 @@ test('/harness-cli：先选是否生成 UI，再一起执行 page 与 ui', async
   assert.match(res.text, /已执行 \/harness-cli ui 登录页面/);
 });
 
-test('/harness-cli plan：先完成 UI 选择和生成，再自动开工', async () => {
+test('/harness-cli：首轮前没有 system head 时跳过选择反馈', async () => {
+  const mod = await import('../cordis.mjs');
+  const BIN = path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js');
+  const dir = tmpRepo();
+  execFileSync(process.execPath, [BIN, 'init', '--preset', 'prototype', '--root', dir], {
+    cwd: dir,
+  });
+  for (const task of ['task-empty-head', 'task-user-head']) {
+    execFileSync(process.execPath, [BIN, 'page', task, '--root', dir], {
+      cwd: dir,
+    });
+  }
+
+  const questions = fakeQuestions('删除');
+  const { ctx, tools } = fakeCtx({ userQuestions: questions });
+  mod.apply(ctx);
+  const tool = tools.find((item) => item.name === 'harness_cli_delete');
+  assert.ok(tool, '应注册 harness_cli_delete');
+
+  // 新会话：surface 还是空的。
+  const emptyAppends = [];
+  const empty = await tool.execute(
+    { task: 'task-empty-head' },
+    {
+      agent: {
+        session: {
+          header: { cwd: dir },
+          surface: { nodes: [] },
+          append(type, message, options) {
+            emptyAppends.push({ type, message, options });
+          },
+        },
+      },
+    },
+  );
+  assert.strictEqual(empty.exitCode, 0, empty.report);
+  assert.deepStrictEqual(
+    emptyAppends,
+    [],
+    '首轮前不能写 user/message，否则 surface 首个节点不是 system head',
+  );
+  assert.ok(
+    !fs.existsSync(path.join(dir, 'prototype', 'task-empty-head')),
+    '跳过反馈不能影响删除本身',
+  );
+
+  // 旧格式遗留：首节点是用户消息，同样没有 system head。
+  const userHeadAppends = [];
+  const userHead = await tool.execute(
+    { task: 'task-user-head' },
+    {
+      agent: {
+        session: {
+          header: { cwd: dir },
+          surface: { nodes: [0] },
+          eventAt() {
+            return { type: 'user/message' };
+          },
+          append(type, message, options) {
+            userHeadAppends.push({ type, message, options });
+          },
+        },
+      },
+    },
+  );
+  assert.strictEqual(userHead.exitCode, 0, userHead.report);
+  assert.deepStrictEqual(userHeadAppends, [], '首节点不是 system 时也要跳过');
+  assert.ok(!fs.existsSync(path.join(dir, 'prototype', 'task-user-head')));
+});
+
+test('/harness-cli plan：只问模式，不再追问 UX/数模/UI，完成后自动开工', async () => {
   const mod = await import('../cordis.mjs');
   process.env.HARNESS_CLI_NO_AUTO_PLANS = '1';
   try {
-    let planExistedAtUiChoice;
-    let uiExistedAtKickoff;
-    let askCount = 0;
+    const asked = [];
     const { ctx, commands } = fakeCtx({
       userQuestions: {
-        async ask() {
-          askCount += 1;
-          planExistedAtUiChoice = fs.existsSync(
-            path.join(dir, 'prototype', '登录页面', 'plan.html'),
-          );
-          const selected =
-            askCount === 1
-              ? '手动'
-              : askCount === 2
-                ? '先不用'
-                : '生成 UI 设计稿';
-          return { answers: [{ id: 'harness-cli', selected: [selected] }] };
+        async ask(request) {
+          asked.push(request);
+          return { answers: [{ id: 'harness-cli', selected: ['自动 loop'] }] };
         },
       },
     });
@@ -919,10 +1126,7 @@ test('/harness-cli plan：先完成 UI 选择和生成，再自动开工', async
     execFileSync(
       process.execPath,
       [bin, 'init', '--preset', 'prototype', '--root', dir],
-      {
-        cwd: dir,
-        encoding: 'utf8',
-      },
+      { cwd: dir, encoding: 'utf8' },
     );
     execFileSync(process.execPath, [bin, 'page', '登录页面', '--root', dir], {
       cwd: dir,
@@ -930,37 +1134,29 @@ test('/harness-cli plan：先完成 UI 选择和生成，再自动开工', async
     });
     fs.unlinkSync(path.join(dir, 'prototype', '登录页面', 'plan.html'));
 
+    let kicked = false;
     const res = await plan.handler({
       rawInput: '登录页面',
       agent: {
         session: { header: { cwd: dir } },
         followup() {
-          if (uiExistedAtKickoff === undefined) {
-            uiExistedAtKickoff = fs.existsSync(
-              path.join(dir, 'prototype', '登录页面', 'ui', 'index.html'),
-            );
-          }
+          kicked = true;
         },
       },
     });
 
     assert.strictEqual(res.kind, 'success', res.text);
-    assert.strictEqual(
-      planExistedAtUiChoice,
-      false,
-      'UI 选择完成前不能先执行 plan',
-    );
-    assert.strictEqual(uiExistedAtKickoff, true, 'UI 生成完成前不能自动开工');
+    assert.strictEqual(asked.length, 1, 'plan 只问操作模式');
+    assert.match(asked[0].questions[0].header, /模式/);
     assert.ok(
       fs.existsSync(path.join(dir, 'prototype', '登录页面', 'plan.html')),
-      '选择完成后应执行 plan',
+      'plan 应补齐缺失的方案页骨架',
     );
     assert.ok(
-      fs.existsSync(
-        path.join(dir, 'prototype', '登录页面', 'ui', 'index.html'),
-      ),
-      '选择 UI 时应生成设计稿',
+      !fs.existsSync(path.join(dir, 'prototype', '登录页面', 'ui', 'index.html')),
+      'plan 不再追问 / 生成 UI',
     );
+    assert.strictEqual(kicked, true, 'plan 完成后仍应自动开工');
   } finally {
     delete process.env.HARNESS_CLI_NO_AUTO_PLANS;
   }
@@ -1045,13 +1241,11 @@ test('/harness-cli plan：整句被当成任务名时，弹窗另要一个短名
     assert.strictEqual(res.kind, 'success', res.text);
     assert.strictEqual(
       asked.length,
-      4,
-      '先弹任务名，再问模式，再问数模，再问 UI',
+      2,
+      'plan 只弹任务名与模式，不再追问 UX/数模/UI',
     );
     assert.strictEqual(asked[0].questions[0].header, '任务名');
     assert.match(asked[1].questions[0].header, /模式/);
-    assert.match(asked[2].questions[0].header, /数模/);
-    assert.match(asked[3].questions[0].header, /UI/);
     const proposal = fs.readFileSync(
       path.join(dir, 'docs/specs/登录页面/proposal.md'),
       'utf8',
@@ -1342,6 +1536,98 @@ function seedTask(dir, name, options) {
       );
     }
   }
+}
+
+/** 把任务文档填到「没有阻断缺口」，用来测 UX 完成后的更新 / 创建分支。 */
+function fillTaskDocs(dir, name) {
+  const specDir = path.join(dir, 'docs', 'specs', name);
+  fs.writeFileSync(
+    path.join(specDir, 'flow.md'),
+    [
+      `# ${name} · 业务流程图`,
+      '',
+      '## 1. 参与角色',
+      '',
+      '- 发起人：来访者，需要进入系统的人',
+      '',
+      '## 2. 业务流程图',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A[打开页面] --> B[提交]',
+      '```',
+      '',
+      '- 主流程：打开页面 → 提交 → 看到结果',
+      '',
+      '## 3. 异常路径',
+      '',
+      '- 输入不合法：就地提示。',
+      '',
+      '## 4. 状态流转',
+      '',
+      '- 表单：待填写 → 提交中 → 成功 / 失败',
+      '',
+    ].join('\n'),
+  );
+  fs.writeFileSync(
+    path.join(specDir, 'proposal.md'),
+    [
+      `# ${name} · 提案`,
+      '',
+      '## 2. 为什么做',
+      '',
+      '来访者需要一个可用的入口进入系统。',
+      '',
+      '## 3. 范围',
+      '',
+      '- 做什么：',
+      '  - 一张登录表单，含用户名与密码。',
+      '',
+      '## 4. 验收',
+      '',
+      '- 合法输入能登录并看到成功提示。',
+      '',
+    ].join('\n'),
+  );
+  fs.writeFileSync(
+    path.join(specDir, 'design.md'),
+    [
+      `# ${name} · 设计`,
+      '',
+      '## 2. 统一语言',
+      '',
+      '| 术语 | 定义 |',
+      '|---|---|',
+      '| 登录 | 用凭证进入系统 |',
+      '',
+      '## 4. 不变量',
+      '',
+      '- 锁定期间不允许提交。',
+      '',
+    ].join('\n'),
+  );
+  const uiDir = path.join(dir, 'prototype', name, 'ui');
+  fs.mkdirSync(uiDir, { recursive: true });
+  fs.writeFileSync(path.join(uiDir, 'index.html'), '<!doctype html><title>ui</title>');
+  fs.writeFileSync(
+    path.join(uiDir, 'README.md'),
+    [
+      `# ${name} · UI 设计说明`,
+      '',
+      '## 1. 页面目标',
+      '',
+      '- 让来访者完成登录。',
+      '',
+      '## 5. 状态与交互',
+      '',
+      '- 错误：表单下方提示。',
+      '',
+      '## 7. 响应式与可访问性',
+      '',
+      '- 键盘可聚焦；窄屏单列。',
+      '',
+    ].join('\n'),
+  );
 }
 
 test('/harness-cli continue：只列未完成任务，选中后派发「从当前进度继续」', async () => {
@@ -1892,6 +2178,7 @@ test('/harness-cli：page 先选数模设计、再选 UI，选数模后生成 sc
     { answers: [{ id: 'harness-cli', selected: ['建任务'] }] },
     { answers: [{ id: 'harness-cli', selected: [], custom: '登录页面' }] },
     { answers: [{ id: 'harness-cli', selected: ['自动 loop'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['先不用'] }] }, // UX 分析
     { answers: [{ id: 'harness-cli', selected: ['创建数模设计'] }] },
     { answers: [{ id: 'harness-cli', selected: ['先不用'] }] },
   ];
@@ -1929,10 +2216,11 @@ test('/harness-cli：page 先选数模设计、再选 UI，选数模后生成 sc
     .handler({ rawInput: '', agent });
 
   assert.strictEqual(res.kind, 'success', res.text);
-  assert.strictEqual(asked.length, 5, '选指令 → 任务名 → 模式 → 数模 → UI');
+  assert.strictEqual(asked.length, 6, '选指令 → 任务名 → 模式 → UX → 数模 → UI');
   assert.strictEqual(asked[2].questions[0].header, '操作模式');
-  assert.strictEqual(asked[3].questions[0].header, '数模设计');
-  assert.strictEqual(asked[4].questions[0].header, 'UI 设计');
+  assert.strictEqual(asked[3].questions[0].header, 'UX 分析');
+  assert.strictEqual(asked[4].questions[0].header, '数模设计');
+  assert.strictEqual(asked[5].questions[0].header, 'UI 设计');
   assert.ok(
     fs.existsSync(path.join(dir, 'docs', 'specs', '登录页面', 'schema.sql')),
   );
@@ -2023,4 +2311,366 @@ test('harness_cli_plan：没有 auto 标记时仍然弹窗确认', async () => {
   assert.strictEqual(result.cancelled, true);
   assert.strictEqual(asked.length, 1);
   assert.strictEqual(asked[0].questions[0].header, '方案确认');
+});
+
+test('/harness-cli ux：多选任务生成报告，有阻断缺口时派发补全', async () => {
+  const mod = await import('../cordis.mjs');
+  const dir = tmpRepo();
+  seedTask(dir, '任务甲');
+
+  const asked = [];
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        asked.push(request);
+        return { answers: [{ id: 'harness-cli', selected: ['任务甲'] }] };
+      },
+    },
+  });
+  mod.apply(ctx);
+
+  const sent = [];
+  const agent = {
+    session: { header: { cwd: dir } },
+    steer: (message) => sent.push(message),
+  };
+  const res = await commandFor(commands, 'ux').handler({
+    rawInput: '',
+    agent,
+  });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(asked.length, 1, '应先弹一次多选框');
+  const question = asked[0].questions[0];
+  assert.strictEqual(question.header, 'UX 分析');
+  assert.strictEqual(question.multiSelect, true, 'ux 必须支持多选');
+  assert.ok(question.options.some((option) => option.label === '全部任务'));
+  assert.ok(question.options.some((option) => option.label === '任务甲'));
+  assert.ok(
+    fs.existsSync(path.join(dir, 'prototype', 'ux.html')),
+    '应生成全量 HTML 报告',
+  );
+  assert.ok(
+    fs.existsSync(path.join(dir, 'prototype', '任务甲', 'ux', 'index.html')),
+    '应生成单任务 HTML 报告',
+  );
+  assert.strictEqual(sent.length, 1, '缺口应派发一次补全请求');
+  assert.match(sent[0].content[0].text, /补全 UX 分析/);
+  assert.match(sent[0].content[0].text, /ux-gaps\.json/);
+  assert.match(res.text, /已将「UX 补全」消息/);
+});
+
+test('/harness-cli ux：分析完成后询问更新，写回 design.md 并派发执行', async () => {
+  const mod = await import('../cordis.mjs');
+  const dir = tmpRepo();
+  seedTask(dir, '任务甲');
+  fillTaskDocs(dir, '任务甲');
+
+  const answers = [
+    { answers: [{ id: 'harness-cli', selected: ['任务甲'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['更新这些任务'] }] },
+  ];
+  let index = 0;
+  const asked = [];
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        asked.push(request);
+        return answers[Math.min(index++, answers.length - 1)];
+      },
+    },
+  });
+  mod.apply(ctx);
+
+  const sent = [];
+  const agent = {
+    session: { header: { cwd: dir } },
+    steer: (message) => sent.push(message),
+  };
+  const res = await commandFor(commands, 'ux').handler({
+    rawInput: '',
+    agent,
+  });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(asked.length, 2, '报告完成后应询问更新或创建');
+  assert.match(asked[1].questions[0].question, /更新任务/);
+  const design = fs.readFileSync(
+    path.join(dir, 'docs', 'specs', '任务甲', 'design.md'),
+    'utf8',
+  );
+  assert.match(design, /<!-- ux-report:begin -->/);
+  assert.strictEqual(sent.length, 1, '应派发一次更新执行请求');
+  assert.match(sent[0].content[0].text, /按 UX 报告更新任务/);
+});
+
+test('/harness-cli ux：没有任务时可只写自定义需求，并创建任务流程', async () => {
+  const mod = await import('../cordis.mjs');
+  const dir = tmpRepo();
+
+  const answers = [
+    {
+      answers: [
+        {
+          id: 'harness-cli',
+          selected: [],
+          custom: '做一个审批流，管理员可以批量审批。什么算做成：批量审批成功。',
+        },
+      ],
+    },
+    { answers: [{ id: 'harness-cli', selected: ['创建新任务'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['审批流'] }] },
+  ];
+  let index = 0;
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask() {
+        return answers[Math.min(index++, answers.length - 1)];
+      },
+    },
+  });
+  mod.apply(ctx);
+
+  const sent = [];
+  const agent = {
+    session: { header: { cwd: dir } },
+    steer: (message) => sent.push(message),
+  };
+  const res = await commandFor(commands, 'ux').handler({
+    rawInput: '',
+    agent,
+  });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.ok(
+    fs.existsSync(path.join(dir, 'docs', 'specs', '审批流', 'proposal.md')),
+    '应创建新任务',
+  );
+  assert.strictEqual(sent.length, 1, '应派发一次创建任务流程');
+  assert.match(sent[0].content[0].text, /新任务「审批流」已创建/);
+});
+
+test('/harness-cli ux：不选任务也生成整体报告，覆盖全部任务', async () => {
+  const mod = await import('../cordis.mjs');
+  const dir = tmpRepo();
+  seedTask(dir, '任务甲');
+  seedTask(dir, '任务乙');
+
+  const asked = [];
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        asked.push(request);
+        return { answers: [{ id: 'harness-cli', selected: [] }] };
+      },
+    },
+  });
+  mod.apply(ctx);
+
+  const sent = [];
+  const agent = {
+    session: { header: { cwd: dir } },
+    steer: (message) => sent.push(message),
+  };
+  const res = await commandFor(commands, 'ux').handler({ rawInput: '', agent });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(asked.length, 1, '只弹一次任务多选框');
+  const html = fs.readFileSync(path.join(dir, 'prototype', 'ux.html'), 'utf8');
+  assert.match(html, /任务甲/);
+  assert.match(html, /任务乙/, '不选任务也要覆盖全部任务');
+  assert.strictEqual(sent.length, 1, '骨架任务的阻断缺口仍派发补全');
+  assert.match(sent[0].content[0].text, /按维度优先级一条条补/);
+});
+
+test('/harness-cli ux：逐条关闭待确认项，写入关闭记录', async () => {
+  const mod = await import('../cordis.mjs');
+  const dir = tmpRepo();
+  seedTask(dir, '任务甲');
+  fillTaskDocs(dir, '任务甲');
+  fs.rmSync(path.join(dir, 'prototype', '任务甲', 'ui'), {
+    recursive: true,
+    force: true,
+  });
+
+  const asked = [];
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        asked.push(request);
+        const question = request.questions[0];
+        if (question.header === '关闭待确认项') {
+          return {
+            answers: [
+              {
+                id: 'harness-cli',
+                selected: [question.options[0].label],
+              },
+            ],
+          };
+        }
+        if (question.multiSelect === true) {
+          return {
+            answers: [{ id: 'harness-cli', selected: ['任务甲'] }],
+          };
+        }
+        return {
+          answers: [
+            { id: 'harness-cli', selected: ['逐条关闭待确认项'] },
+          ],
+        };
+      },
+    },
+  });
+  mod.apply(ctx);
+
+  const agent = {
+    session: { header: { cwd: dir } },
+    steer: () => {},
+  };
+  const res = await commandFor(commands, 'ux').handler({ rawInput: '', agent });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(asked.length, 3, '任务选择 → 完成菜单 → 关闭多选');
+  const storeFile = path.join(dir, 'prototype', '.ux-resolved.json');
+  assert.ok(fs.existsSync(storeFile), '应写入关闭记录');
+  const store = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+  assert.strictEqual(store.resolved.length, 1);
+  assert.match(res.text, /已关闭 1 项/);
+});
+
+test('/harness-cli ux --resolve：直接关闭待确认项，不再弹任务选择框', async () => {
+  const mod = await import('../cordis.mjs');
+  const dir = tmpRepo();
+  seedTask(dir, '任务甲');
+  const BIN = path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js');
+  execFileSync(process.execPath, [BIN, 'ux', '任务甲', '--root', dir], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
+  const gaps = JSON.parse(
+    fs.readFileSync(path.join(dir, 'prototype', '.ux-gaps.json'), 'utf8'),
+  );
+  const target = gaps.gaps[0];
+  assert.ok(target, '应先生成待确认清单');
+
+  let asked = 0;
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask() {
+        asked += 1;
+        return { answers: [] };
+      },
+    },
+  });
+  mod.apply(ctx);
+  const res = await commandFor(commands, 'ux').handler({
+    rawInput: `--resolve ${target.id} --by 测试`,
+    agent: { session: { header: { cwd: dir } } },
+  });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(asked, 0, '--resolve 不应再弹任务选择框');
+  const store = JSON.parse(
+    fs.readFileSync(path.join(dir, 'prototype', '.ux-resolved.json'), 'utf8'),
+  );
+  assert.ok(store.resolved.some((entry) => entry.id === target.id));
+  assert.match(res.text, /CLOSED/);
+});
+
+test('harness_cli_ux：工具参数生成 CLI argv', async () => {
+  const mod = await import('../cordis.mjs');
+  const spec = mod.TOOL_SPECS.find((item) => item.toolName === 'harness_cli_ux');
+  assert.ok(spec, '应注册 harness_cli_ux');
+  assert.deepStrictEqual(
+    spec.buildArgs({ tasks: ['任务甲'], user_words: '需求原文', apply: true }),
+    ['ux', '任务甲', '--user-words', '需求原文', '--apply'],
+  );
+  assert.deepStrictEqual(
+    spec.buildArgs({ resolve: ['G-1a2b3c4d'], by: '测试' }),
+    ['ux', '--resolve', 'G-1a2b3c4d', '--by', '测试'],
+  );
+  assert.throws(() => spec.buildArgs({}), /至少要给一个/);
+});
+
+test('/harness-cli：page 先问 UX，再按 UX 问数模，最后关联生成 UI', async () => {
+  const mod = await import('../cordis.mjs');
+  const asked = [];
+  const answers = [
+    { answers: [{ id: 'harness-cli', selected: ['建任务'] }] },
+    { answers: [{ id: 'harness-cli', selected: [], custom: '登录页面' }] },
+    { answers: [{ id: 'harness-cli', selected: ['自动 loop'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['生成 UX 报告'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['根据 UX 生成数模'] }] },
+    { answers: [{ id: 'harness-cli', selected: ['关联生成 UI'] }] },
+  ];
+  const { ctx, commands } = fakeCtx({
+    userQuestions: {
+      async ask(request) {
+        asked.push(request);
+        return answers.shift();
+      },
+    },
+  });
+  mod.apply(ctx);
+
+  const dir = tmpRepo();
+  execFileSync(
+    process.execPath,
+    [
+      path.join(__dirname, '..', 'bin', 'dsh-plugin-harness-cli.js'),
+      'init',
+      '--preset',
+      'prototype',
+      '--root',
+      dir,
+    ],
+    { cwd: dir, encoding: 'utf8' },
+  );
+
+  const sent = [];
+  const agent = {
+    session: { header: { cwd: dir } },
+    steer: (message) => sent.push(message),
+  };
+  const res = await commands
+    .find((command) => command.name === 'harness-cli')
+    .handler({ rawInput: '', agent });
+
+  assert.strictEqual(res.kind, 'success', res.text);
+  assert.strictEqual(
+    asked.length,
+    6,
+    '选指令 → 任务名 → 模式 → UX → 数模 → UI',
+  );
+  assert.match(asked[3].questions[0].header, /UX/);
+  assert.match(asked[4].questions[0].header, /数模/);
+  assert.match(asked[4].questions[0].question, /根据刚才的 UX 报告/);
+  assert.match(asked[5].questions[0].header, /UI/);
+  assert.ok(
+    asked[5].questions[0].options.some(
+      (option) => option.label === '关联生成 UI',
+    ),
+    '选了 UX / 数模后，UI 问法必须带「关联」',
+  );
+
+  assert.ok(fs.existsSync(path.join(dir, 'prototype', 'ux.html')));
+  assert.ok(
+    fs.existsSync(
+      path.join(dir, 'prototype', '登录页面', 'ux', 'index.html'),
+    ),
+  );
+  const design = fs.readFileSync(
+    path.join(dir, 'docs', 'specs', '登录页面', 'design.md'),
+    'utf8',
+  );
+  assert.match(design, /<!-- ux-report:begin -->/);
+  assert.ok(
+    fs.existsSync(path.join(dir, 'docs', 'specs', '登录页面', 'schema.sql')),
+  );
+  assert.ok(
+    fs.existsSync(path.join(dir, 'prototype', '登录页面', 'ui', 'index.html')),
+  );
+  assert.match(res.text, /已执行 \/harness-cli ux 登录页面（含 --apply）/);
+  assert.match(res.text, /已执行 \/harness-cli ui 登录页面（已关联前面的文档）/);
 });

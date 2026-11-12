@@ -257,24 +257,23 @@ function checkRuntimeFiles(root, config, c) {
   if (isDir(wikiDir)) {
     const status = wikiStatus(root, {dir: config.paths.wiki || 'docs/wiki'});
     if (status.conflicts.length > 0) {
-      const adoptable = (status.adoptable || []).length;
-      const edited = status.conflicts.length - adoptable;
-      const detail = [
-        adoptable > 0 ? `${adoptable} 篇没有受管区块（--update 补区块、正文保留）` : '',
-        edited > 0 ? `${edited} 篇受管区块被人工改过` : '',
-      ].filter(Boolean).join('，');
       c.add(
         'H109',
         'warn',
-        `${config.paths.wiki} 有 ${status.conflicts.length} 篇与事实冲突：${detail}`,
-        '跑 dsh-plugin-harness-cli wiki --update 接管 / --keep 保留现状'
+        `${config.paths.wiki} 有 ${status.conflicts.length} 篇受管区块标记不完整：${status.conflicts.join(', ')}`,
+        '先手工补全 begin / end 标记，再跑 dsh-plugin-harness-cli wiki'
       );
-    } else if (status.missing.length + status.stale.length > 0) {
+    } else if (status.missing.length + status.stale.length + status.adoptable.length > 0) {
+      const detail = [
+        status.missing.length > 0 ? `缺 ${status.missing.length} 篇` : '',
+        status.stale.length > 0 ? `旧 ${status.stale.length} 篇` : '',
+        status.adoptable.length > 0 ? `${status.adoptable.length} 篇待接管` : '',
+      ].filter(Boolean).join('、');
       c.add(
         'H109',
         'warn',
-        `${config.paths.wiki} 已过期：缺 ${status.missing.length} 篇、旧 ${status.stale.length} 篇`,
-        '跑 dsh-plugin-harness-cli wiki 更新（或 --check 只看差异）'
+        `${config.paths.wiki} 已过期：${detail}`,
+        '跑 dsh-plugin-harness-cli wiki 增量合并（或 --check 只看差异）'
       );
     } else {
       c.pass('H109', `${config.paths.wiki} 与事实一致`);

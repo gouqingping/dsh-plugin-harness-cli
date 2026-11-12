@@ -36,6 +36,7 @@ const {
   readTaskMode,
   writeTaskMode,
 } = require('./src/plans.js');
+const { PROCESS_TEXT, isProcessTopic } = require('./src/process.js');
 
 /** Cordis 插件标识（与 `cordis.patch.yml` 里的 `id` 对应）。 */
 export const name = 'harness-cli';
@@ -210,12 +211,42 @@ function buildReport(run) {
 }
 
 /**
+ * 判断会话是否已经有受保护的 system head。
+ *
+ * DSH v4 要求 surface 的第一个节点是 system/message；新会话在首轮开始前还没有这个
+ * head，此时追加 user/message 会让日志写成非法顺序，冷读时报
+ * `system/message requires a protected first surface head`，整个会话历史都打不开。
+ * @param {any} session - 当前 agent 的 Session。
+ * @returns {boolean} 有 head 返回 true；没有 surface API 的旧宿主按原行为返回 true。
+ */
+function hasSystemHead(session) {
+  let nodes;
+  try {
+    nodes = session?.surface?.nodes;
+  } catch {
+    return false;
+  }
+  // 旧版宿主没有 surface API，无法判断，沿用「直接追加」的旧行为。
+  if (!Array.isArray(nodes)) return true;
+  if (nodes.length === 0) return false;
+  try {
+    return session.eventAt?.(nodes[0])?.type === 'system/message';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 把一个选择结果立即追加成对话里的用户消息，但不唤醒新的模型回合。
  * 这样选择一完成就能在对话里看到，同时主命令仍由当前 handler 继续执行。
+ *
+ * 首轮开始前还没有 system head 时跳过：命令结果仍由当前 handler 返回，只是少一条
+ * 独立的「已选择：…」消息，换来会话日志始终可冷读。
  */
 function appendChoiceFeedback(exec, selected, custom) {
   const session = exec?.agent?.session;
   if (!session || typeof session.append !== 'function') return false;
+  if (!hasSystemHead(session)) return false;
   const picked = (Array.isArray(selected) ? selected : [])
     .filter((value) => typeof value === 'string' && value.trim().length > 0)
     .map((value) => value.trim());
@@ -251,7 +282,7 @@ function appendChoiceFeedback(exec, selected, custom) {
  * @param {{header: string, question: string, options: Array<{label: string, description?: string}>}} ask - 问题。
  * @returns {Promise<string|null>} 选中的标签；取消、超时或没有 UI 时 null。
  */
-async function askChoice(ctx, exec, ask, onError) {
+async function askChoice(ctx, exec, ask, onError, opts) {
   const service =
     ctx && typeof ctx.get === 'function' ? ctx.get('userQuestions') : undefined;
   if (!service || typeof service.ask !== 'function') return null;
@@ -279,12 +310,21 @@ async function askChoice(ctx, exec, ask, onError) {
       answer && Array.isArray(answer.answers) ? answer.answers : []
     ).find((entry) => entry && entry.id === 'harness-cli');
     if (!item) return null;
+    const feedback = (selected, typed) => {
+      if (!opts || opts.feedback === undefined) return true;
+      if (opts.feedback === false) return false;
+      return typeof opts.feedback === 'function'
+        ? opts.feedback(selected, typed)
+        : true;
+    };
     if (Array.isArray(item.selected) && item.selected.length > 0) {
-      appendChoiceFeedback(exec, item.selected, item.custom);
+      if (feedback(item.selected, item.custom)) {
+        appendChoiceFeedback(exec, item.selected, item.custom);
+      }
       return item.selected[0];
     }
     const custom = typeof item.custom === 'string' ? item.custom.trim() : '';
-    appendChoiceFeedback(exec, [], custom);
+    if (feedback([], custom)) appendChoiceFeedback(exec, [], custom);
     return custom.length > 0 ? custom : null;
   } catch (err) {
     if (typeof onError === 'function') onError(err);
@@ -339,14 +379,6 @@ async function askMultiChoice(ctx, exec, ask, onError) {
     if (typeof onError === 'function') onError(err);
     return null;
   }
-}
-
-/** 去掉 wiki 的模式参数，再按用户的选择补一个。 */
-function withWikiMode(argv, mode) {
-  return [
-    ...argv.filter((arg) => !['--ask', '--keep', '--update'].includes(arg)),
-    mode,
-  ];
 }
 
 /**
@@ -481,8 +513,8 @@ const INIT_DESCRIPTION =
   'Writes files: pass `dry_run` first to preview the plan.';
 
 const PAGE_DESCRIPTION =
-  'Create a task workspace: writes prototype/<task>/progress.html and the four spec documents ' +
-  'docs/specs/<task>/{proposal,spec,design,tasks}.md, then refreshes prototype/progress.html. ' +
+  'Create a task workspace: writes prototype/<task>/progress.html and the five spec documents ' +
+  'docs/specs/<task>/{flow,proposal,spec,design,tasks}.md, then refreshes prototype/progress.html. ' +
   'The generated page is a skeleton (DDD domain / SDD contracts / TDD cases / numbered plan) that fails ' +
   '`check` until filled in. Idempotent: an existing page is never overwritten without `force`, and missing ' +
   'spec documents are filled in for an existing task. Task names may be ASCII kebab-case or Chinese (e.g. 登录页面).';
@@ -494,9 +526,9 @@ const REVIEW_DESCRIPTION =
   'and only then may progress be written.';
 
 const PLAN_DESCRIPTION =
-  'Create or confirm the plan page for one task: prototype/<task>/plan.html. The plan states the goal, the ' +
-  'approach (DDD boundary + SDD contracts), the page design (when the task has UI), the flow/interaction ' +
-  'design, risks, and acceptance criteria. Confirmation is OPTIONAL and requires a passed review whose ' +
+  'Update or generate docs/specs/<task>/ only (proposal / spec / design / tasks / flow). When the task has not ' +
+  'started (0% progress and not confirmed) it also fills the task page and prototype/<task>/plan.html skeleton; ' +
+  'once started or confirmed it never rewrites those prototype pages. Confirmation is OPTIONAL and requires a passed review whose ' +
   'fingerprint matches the current docs/specs/<task>/*.md; after confirmation any document edit invalidates it. ' +
   'With confirm=true the tool pops a chooser before confirming. Progress does NOT require confirmation: ' +
   'P21/P22 still fail `check`, but they never block `progress`.';
@@ -515,6 +547,19 @@ const UI_DESCRIPTION =
   'states, contract mapping, responsive rules). Creates the task page and spec docs first if they do not exist. ' +
   'All UI must follow antd; a second design system fails the P20 gate. Existing files are kept unless `force`.';
 
+const UX_DESCRIPTION =
+  'Build a project-wide UX and requirements analysis report. prototype/ux.html always covers every task in the ' +
+  'repository (the task list only limits which design.md blocks apply refreshes; every task still gets a ' +
+  'refreshed per-task report), plus the ' +
+  'persistent project requirements in docs/ux/requirements.md. The report derives users and scenarios, ' +
+  'requirement breakdown, task relations, experience flows, exceptions and recovery, states, a usability ' +
+  'checklist and a prioritised pending list from docs/specs (proposal / spec / design / flow), prototype UI notes ' +
+  'and the custom input. Gaps have stable ids: fixing the docs and re-running removes them, while confirmed items ' +
+  'can be closed one by one with resolve=[\'G-xxxxxxxx\']. Use apply=true to write the conclusion back into ' +
+  'docs/specs/<task>/design.md as a managed UX block; directly related tasks are refreshed together. In DSH, the ' +
+  '/harness-cli ux command also asks whether to update the analyzed tasks, close confirmed items, or create a new ' +
+  'task flow.';
+
 const SQL_DESCRIPTION =
   'Generate or refresh the database design for one task. Ensures docs/specs/<task>/schema.sql (DDL, the single ' +
   'source of truth) and docs/specs/<task>/database.md exist; parses schema.sql; lints it against Google ' +
@@ -526,13 +571,16 @@ const SQL_DESCRIPTION =
 const WIKI_DESCRIPTION =
   'Generate or refresh docs/wiki (13 business-facing documents: one-page overview, deployment, roles, flows, ' +
   'feature list, states and rules, conventions, quality gates, acceptance, risks, glossary, manual, README). ' +
-  'The body is plain business language: no commands, code blocks or field names; unknown business facts are ' +
-  'marked "待业务确认" and listed as gaps for you to backfill from the workspace. ' +
+  'The body is plain business language: no commands, code blocks or field names; business facts are re-derived ' +
+  'from docs/specs (proposal / spec / design) and docs/adr, and anything still unknown is marked "待业务确认" ' +
+  'and listed as gaps for you to backfill from the workspace. ' +
   'Scans the repository and writes only the managed block of each file; human text outside it is never touched. ' +
-  'A pre-existing document without a managed block is "adoptable": mode "auto" adds the block and keeps its ' +
-  'original text verbatim; mode "ask" reports it and exits 1. ' +
+  'The default "merge" mode does a three-way merge against the last generation: generated facts are refreshed ' +
+  'and human-written paragraphs are kept; a pre-existing document without a managed block is adopted by adding ' +
+  'the block above its original text. mode "auto" rewrites the whole managed block and "keep" only creates ' +
+  'missing files. ' +
   'Domain drill-down pages are only created for dirs that declare a business "name" in the config. ' +
-  'mode defaults to "ask"; check=true only reports missing/stale/adoptable/conflicting files.';
+  'check=true only reports missing/stale/adoptable/conflicting files.';
 
 const AGENTS_DESCRIPTION =
   'Regenerate AGENTS.md from harness-cli.json, which is the single source of truth; never hand-edit AGENTS.md. ' +
@@ -687,9 +735,9 @@ const TOOL_SPECS = [
         root: ROOT_PROPERTY,
         mode: {
           type: 'string',
-          enum: ['ask', 'auto', 'keep'],
+          enum: ['merge', 'auto', 'keep'],
           description:
-            'ask = 冲突时报告并退出 1（由你询问用户后再决定）；auto = 覆盖受管区块；keep = 保留人工内容，只补缺失文件。',
+            'merge（默认）= 与上次生成三路合并，人工段落保留、事实刷新；auto = 整块重写受管区块；keep = 只补缺失文件。',
         },
         check: {
           type: 'boolean',
@@ -705,43 +753,9 @@ const TOOL_SPECS = [
     buildArgs: (input) => [
       'wiki',
       ...(input.check === true ? ['--check'] : []),
-      ...(input.mode === 'auto'
-        ? ['--update']
-        : input.mode === 'keep'
-          ? ['--keep']
-          : ['--ask']),
+      ...(input.mode === 'auto' ? ['--update'] : input.mode === 'keep' ? ['--keep'] : ['--merge']),
       ...(input.dry_run === true ? ['--dry-run'] : []),
     ],
-    after: async ({ ctx, exec, input, argv, run }) => {
-      // 只有「默认模式遇到冲突」才需要人决策；--dry-run / --check 与显式模式都不打断
-      if (input.check === true || input.dry_run === true) return null;
-      if (input.mode === 'auto' || input.mode === 'keep') return null;
-      const text = `${run.stdout || ''}${run.stderr || ''}`;
-      if (run.exitCode !== 1 || !/待接管|冲突/.test(text)) return null;
-      const answer = await askChoice(ctx, exec, {
-        header: '业务 wiki 冲突',
-        question:
-          'docs/wiki 里有文档没有受管区块，或受管区块被改过。要怎么处理？' +
-          '（接管 = 补区块并原样保留正文；只补缺失 = 完全不动已有文件）',
-        options: [
-          {
-            label: '接管既有文档',
-            description: '补上受管区块，人工正文一字不改，之后可增量更新',
-          },
-          {
-            label: '只补缺失文件',
-            description: '已有文件保持原样，只创建缺的文档',
-          },
-          { label: '取消', description: '什么都不做，退出码保持 1' },
-        ],
-      });
-      if (answer === '接管既有文档')
-        return { argv: withWikiMode(argv, '--update') };
-      if (answer === '只补缺失文件')
-        return { argv: withWikiMode(argv, '--keep') };
-      if (answer === '取消') return null;
-      return null; // 没有 UI：保持退出码 1，让人在命令行决定
-    },
   },
   {
     toolName: 'harness_cli_review',
@@ -1029,6 +1043,67 @@ const TOOL_SPECS = [
     },
   },
   {
+    toolName: 'harness_cli_ux',
+    command: 'ux',
+    description: UX_DESCRIPTION,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: [],
+      properties: {
+        root: ROOT_PROPERTY,
+        tasks: {
+          type: 'array',
+          items: {type: 'string'},
+          description: '要分析的任务名（可多个）；省略时改用 user_words。',
+        },
+        user_words: {
+          type: 'string',
+          description: '自定义需求原文；可与 tasks 一起分析。',
+        },
+        apply: {
+          type: 'boolean',
+          description: '把报告结论写回任务的 docs/specs/<task>/design.md（UX 复核区块），并刷新直接关联任务。',
+        },
+        resolve: {
+          type: 'array',
+          items: {type: 'string'},
+          description: '要关闭的待确认编号（报告里的 G-xxxxxxxx），可逐条关闭已确认的项。',
+        },
+        by: {
+          type: 'string',
+          description: '关闭人（默认「用户」）。',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: '只打印将写入的文件，不落盘。',
+        },
+      },
+    },
+    buildArgs: (input) => {
+      const tasks = (Array.isArray(input.tasks) ? input.tasks : [])
+        .filter((item) => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => item.trim());
+      const words = typeof input.user_words === 'string' ? input.user_words.trim() : '';
+      const resolve = (Array.isArray(input.resolve) ? input.resolve : [])
+        .filter((item) => typeof item === 'string' && item.trim().length > 0)
+        .map((item) => item.trim());
+      if (tasks.length === 0 && words.length === 0 && resolve.length === 0)
+        throw new Error('`tasks`、`user_words` 或 `resolve` 至少要给一个');
+      return [
+        'ux',
+        ...tasks,
+        ...(words.length > 0 ? ['--user-words', input.user_words] : []),
+        ...(resolve.length > 0 ? ['--resolve', resolve.join(',')] : []),
+        ...(typeof input.by === 'string' && input.by.trim().length > 0
+          ? ['--by', input.by.trim()]
+          : []),
+        ...(input.apply === true ? ['--apply'] : []),
+        ...(input.dry_run === true ? ['--dry-run'] : []),
+      ];
+    },
+  },
+  {
     toolName: 'harness_cli_sql',
     command: 'sql',
     description: SQL_DESCRIPTION,
@@ -1198,6 +1273,8 @@ function parseCommandInput(rawInput) {
       parsed.update = true;
     } else if (token === '--keep') {
       parsed.keep = true;
+    } else if (token === '--merge') {
+      parsed.merge = true;
     } else if (token === '--check') {
       parsed.checkNow = true;
     } else if (token === '--root' || token === '-r') {
@@ -1387,6 +1464,28 @@ function parseTaskListInput(rawInput) {
       const value = tokens[++index];
       if (value === undefined) return { error: '`--root` 缺少路径参数' };
       parsed.root = value.replace(/^["']|["']$/g, '');
+    } else if (token === '--user-words') {
+      const value = tokens[++index];
+      if (value === undefined) return { error: '`--user-words` 缺少取值' };
+      parsed.userWords = value.replace(/^["']|["']$/g, '');
+    } else if (token === '--apply') {
+      parsed.apply = true;
+    } else if (token === '--resolve') {
+      const value = tokens[++index];
+      if (value === undefined) return { error: '`--resolve` 缺少编号' };
+      parsed.resolve = [
+        ...(parsed.resolve || []),
+        ...value
+          .replace(/^["']|["']$/g, '')
+          .split(/[,，\s]+/)
+          .filter(Boolean),
+      ];
+    } else if (token === '--by') {
+      const value = tokens[++index];
+      if (value === undefined) return { error: '`--by` 缺少取值' };
+      parsed.by = value.replace(/^["']|["']$/g, '');
+    } else if (token === '--dry-run') {
+      parsed.dryRun = true;
     } else if (!token.startsWith('-')) {
       parsed.tasks.push(token.replace(/^["']|["']$/g, ''));
     } else {
@@ -1418,9 +1517,9 @@ const SUBCOMMANDS = [
   { label: '建任务', sub: 'page' },
   { label: '方案', sub: 'plan' },
   { label: '复盘', sub: 'review' },
-  { label: '推进度', sub: 'progress' },
   { label: '继续任务', sub: 'continue' },
   { label: '重跑任务', sub: 'restart' },
+  { label: 'UX 分析', sub: 'ux' },
   { label: 'UI 设计', sub: 'ui' },
   { label: '数据库设计', sub: 'sql' },
   { label: '删除任务', sub: 'delete' },
@@ -1430,13 +1529,59 @@ const SUBCOMMANDS = [
   { label: '帮助', sub: 'help' },
 ];
 
+/** 每个子指令的帮助：用法 + 一句话说明（`help` 选择框和 `help <子指令>` 共用）。 */
+const SUBCOMMAND_HELP = {
+  init: {usage: '[--preset prototype] [--force] [--dry-run]', desc: '生成 Harness 骨架（AGENTS.md / 四件套 / 门禁）'},
+  check: {usage: '[--strict] [--json]', desc: '只读校验配置与流程证据'},
+  doctor: {usage: '[--json]', desc: '检查工具与环境本身'},
+  page: {usage: '<任务名> [--user-words "原话"]', desc: '建任务页 + 五份规范文档 + 方案页；DSH 侧按 UX → 数模 → UI 顺序追问'},
+  plan: {usage: '[任务名] [--confirm --by "确认人"]', desc: '只写 docs/specs；未开工骨架补齐页面；确认可选'},
+  review: {usage: '[任务名] [--agent <标识>]', desc: '复盘：核对文档与任务页，写 review.md'},
+  progress: {usage: '<任务名> --step N --pct 0..100 [--status …]', desc: '记录步骤与状态（菜单已收起，可直接调用）'},
+  continue: {usage: '[任务名]', desc: '选择未完成任务，从当前进度继续'},
+  restart: {usage: '[任务名...]', desc: '重跑任务：进度归零、方案待确认'},
+  ux: {usage: '[任务名...] [--user-words "需求"] [--resolve <编号...>] [--apply]', desc: '整体 UX 与需求分析（全部任务 + 项目需求，prototype/ux.html）；缺口可逐条关闭，关联任务同步刷新'},
+  ui: {usage: '[任务名]', desc: '生成 antd v5 UI 设计稿（令牌 + 布局 + 表格 / 表单 / 状态）'},
+  sql: {usage: '[任务名] [--dry-run]', desc: '按 Google 数模规范生成 schema 与 ER 图'},
+  delete: {usage: '<任务名> [<任务名>...] [--yes]', desc: '删除任务页 / 设计稿 / 数据模型 / 文档 / 复盘'},
+  wiki: {usage: '[--update|--keep] [--check]', desc: '生成 / 更新业务 wiki（默认增量合并）'},
+  plans: {usage: '[serve [端口] | stop]', desc: '任务总览操作台（删除 / 重跑 / 编辑 / 预览）'},
+  agents: {usage: '', desc: '由 harness-cli.json 生成 AGENTS.md'},
+  help: {usage: '[指令名 | process]', desc: '查看指令说明；help process 看完整流程'},
+};
+
+/** 子指令的中文标签；progress 不在菜单里，单独补一个。 */
+function subcommandLabel(sub) {
+  const hit = SUBCOMMANDS.find((item) => item.sub === sub);
+  if (hit) return hit.label;
+  return sub === 'progress' ? '推进度' : sub;
+}
+
+/** `help` 不带参数时的选择框选项：所有子指令 + 一个「完整帮助」。 */
+function helpTopicOptions() {
+  const topics = Object.keys(SUBCOMMAND_HELP).map((sub) => ({
+    value: sub,
+    // 选项就是指令后缀：选中 delete → /harness-cli help delete
+    label: sub,
+    description: `${subcommandLabel(sub)} · ${SUBCOMMAND_HELP[sub].desc}`,
+  }));
+  topics.push({
+    value: '',
+    label: '完整帮助',
+    description: '不选具体指令，直接看完整帮助',
+  });
+  return topics;
+}
+
 /** 任务标准流程（帮助里反复用到，单独一份）。 */
 const WORKFLOW_TEXT = [
   '任务标准流程（顺序不能颠倒）：',
   '  0. 开工前先问用户：手动（每步等确认）还是自动 loop（自动推进、所有确认 / 选择走推荐项）',
   '  1. /harness-cli init                    生成骨架（默认带任务页能力）',
-  '  2. /harness-cli ui <任务>               建任务页 + 四份规范文档 + 方案页；需要界面时生成 antd 设计稿',
-  '  3. /harness-cli sql [任务...]           多选任务：按 Google 数模规范设计 schema 与 ER 数模图',
+  '  2. /harness-cli page <任务>              建任务页 + 五份文档 + 方案页；DSH 侧依次问 UX → 数模 → UI',
+  '      · 选 UX：生成报告并 --apply 回写 design.md；再问「根据 UX 生成数模」；',
+  '      · 选数模 / UX 后，UI 问法变成「关联前面的文档生成 UI」；',
+  '  3. /harness-cli plan <任务>              只写 docs/specs；未开工时补齐任务页 / 方案页骨架，完成后自动开工',
   '  4. 人改 docs/specs/<任务>/*.md       proposal / spec / design / tasks（可直接改）',
   '  5. /harness-cli review <任务>           Agent 复盘：文档与页面一致才通过，写 review.md（含文档指纹）',
   '  6. /harness-cli plan <任务> --confirm --by "确认人"   确认方案（可选；确认时弹窗点选，不确认也能记进度）',
@@ -1462,6 +1607,23 @@ function buildHelpText(topic) {
   const commands = COMMAND_MANUAL;
 
   if (key.length > 0) {
+    if (isProcessTopic(key)) return `${PROCESS_TEXT}\n`;
+    const sub = SUBCOMMAND_HELP[key];
+    if (sub) {
+      const tool = TOOL_SPECS.find(
+        (spec) => spec.toolName === `harness_cli_${key}`,
+      );
+      return [
+        `/harness-cli help ${key}`,
+        `  指令：/harness-cli ${key}    ${subcommandLabel(key)}`,
+        `  用法：/harness-cli ${key}${sub.usage ? ` ${sub.usage}` : ''}`,
+        `  说明：${sub.desc}`,
+        ...(tool ? [`  对应工具：${tool.toolName}`] : []),
+        '',
+        '完整流程：/harness-cli help process',
+        '',
+      ].join('\n');
+    }
     const command = commands.find(
       (item) =>
         item.name === key ||
@@ -1519,6 +1681,8 @@ function buildHelpText(topic) {
         ) || '无';
       return `  ${item.name}（子命令 ${spec.command}）参数：${params}`;
     }),
+    '',
+    '查看完整流程：/harness-cli help process（别名：flow / workflow / 流程 / 完整流程）',
     '',
     '命令行等价（在目标仓库目录）：',
     '  dsh-plugin-harness-cli init | page | plan | review | progress | ui | check | doctor | wiki | plans | style',
@@ -1643,6 +1807,20 @@ function readTaskList(root) {
   }
 }
 
+/** 读上一轮 ux 的待确认清单（整体报告），用于逐条关闭。 */
+function readUxGaps(root) {
+  try {
+    const { config } = loadConfig(root);
+    const dir = ((config.presets || {}).prototype || {}).dir || 'prototype';
+    const data = JSON.parse(
+      fs.readFileSync(path.join(root, dir, '.ux-gaps.json'), 'utf8'),
+    );
+    return Array.isArray(data.gaps) ? data.gaps : [];
+  } catch (error) {
+    return [];
+  }
+}
+
 /** 找不到任务时列出可选项。 */
 function taskListHint(tasks) {
   if (tasks.length === 0)
@@ -1712,30 +1890,110 @@ function restartTasksPrompt(tasks) {
   ].join('\n');
 }
 
+/** 从自定义需求里推一个合法任务名；推不出就用日期兜底。 */
+function suggestUxTaskName(userWords) {
+  const first = String(userWords || '')
+    .split(/[\n。；;，,]/)[0]
+    .trim();
+  const cleaned = first
+    .replace(/^(我想|想要|需要|请|帮我|实现|做一个|做个)/, '')
+    .replace(/[\\/:*?"<>|\s]+/g, '')
+    .slice(0, 16);
+  if (cleaned.length > 0 && isValidTaskName(cleaned)) return cleaned;
+  return `ux-${new Date().toISOString().slice(0, 10)}`;
+}
+
+/** UX 报告有阻断缺口时，派发给 Agent 的补全说明。 */
+function uxFillPrompt(gapsFile, count) {
+  return [
+    '补全 UX 分析（由 /harness-cli ux 发起，不要只回复摘要）：',
+    `1. 读 ${gapsFile || 'prototype/.ux-gaps.json'}：本次有 ${count} 处阻断缺口；`,
+    '2. 按维度优先级一条条补：用户与场景 → 需求拆解 → 体验流程 → 异常与恢复；每补完一条重跑 /harness-cli ux，清单会自动移除已补项；',
+    '3. 缺口带稳定编号（G-xxxxxxxx）；文档无法自动证明、但用户已确认的，用 /harness-cli ux --resolve <编号> --by "确认人" 逐条关闭；',
+    '4. 有关联任务时，读 prototype/ux.json 的 relations / relatedByTask，两边的角色、术语与流程一并更新；',
+    '5. 有界面的任务同步 prototype/<任务>/ui/README.md 的状态与契约对应；',
+    '6. 重跑 /harness-cli ux，直到「UX 分析仍需补全：0 处阻断」，再决定更新任务还是创建新任务。',
+  ].join('\n');
+}
+
+/** 选择「更新任务」后，派发给 Agent 的执行说明。 */
+function uxUpdatePrompt(tasks) {
+  return [
+    '按 UX 报告更新任务（由 /harness-cli ux 发起，不要只回复摘要）：',
+    '要更新的任务：' + tasks.map((task) => task.name || task).join('、'),
+    '1. 读 prototype/ux.html、prototype/ux.json 与各任务的 prototype/<任务>/ux/index.html；',
+    '2. 把「需求拆解 / 体验流程 / 异常与恢复 / 待确认」落到 docs/specs/<任务>/{proposal,flow,design}.md；',
+    '3. 按 prototype/ux.json 的 relations / relatedByTask 找出关联任务，同步核对角色、术语与流程，避免只改一边；',
+    '4. 有界面的任务同步 prototype/<任务>/ui/README.md 的状态与契约对应；',
+    '5. 逐个任务（含关联任务）跑 /harness-cli review <任务>，再 /harness-cli plan <任务> --confirm --by "自动 loop"；',
+    '6. 汇报改了哪些文件、关联任务改了什么、哪些待确认还没有落点。',
+  ].join('\n');
+}
+
+/** 选择「创建新任务」后，派发给 Agent 的执行说明。 */
+function uxCreatePrompt(task, userWords) {
+  return [
+    `新任务「${task}」已创建（任务页 + 规范文档 + 方案页）。按 UX 报告发起任务流程：`,
+    `1. 读 prototype/ux.html 与 prototype/ux.json${userWords ? '；需求原文已写进 proposal.md' : ''}；`,
+    `2. 补全 docs/specs/${task}/{flow,proposal,spec,design,tasks}.md；`,
+    `3. 需要界面时跑 /harness-cli ui ${task}；`,
+    `4. 跑 /harness-cli review ${task}，再 /harness-cli plan ${task} --confirm --by "自动 loop"；`,
+    '5. 按方案步骤执行，每步用 /harness-cli progress 记录。',
+  ].join('\n');
+}
+
 /**
  * page / plan 执行前先收集 UI 选项，选择结束后再开始任何文件写入。
  * 没有可用选择框时返回 false，保持非交互环境的旧行为：只执行主命令。
  */
-async function askUiBeforeExecution(ctx, invocation, subName, rest) {
+async function askUxBeforeExecution(ctx, invocation, subName, rest) {
   const task = firstTaskName(rest, '');
   const picked = await askChoice(
     ctx,
     { agent: invocation?.agent, signal: invocation?.signal },
     {
-      header: 'UI 设计',
+      header: 'UX 分析',
       question: task
-        ? `「${task}」要不要同时生成 UI 设计稿？`
-        : `「${subName === 'page' ? '新任务' : '当前任务'}」要不要同时生成 UI 设计稿？`,
+        ? `「${task}」要不要同时生成 UX 与需求分析报告？`
+        : `「${subName === 'page' ? '新任务' : '当前任务'}」要不要同时生成 UX 与需求分析报告？`,
       options: [
         {
-          label: '生成 UI 设计稿',
-          description: '选择完成后，与主命令一起执行',
+          label: '生成 UX 报告',
+          description: '生成 prototype/ux.html 与单任务 ux/index.html，并把结论回写 design.md',
         },
         { label: '先不用', description: '只执行主命令' },
       ],
     },
   );
-  return picked === '生成 UI 设计稿';
+  return picked === '生成 UX 报告';
+}
+
+async function askUiBeforeExecution(ctx, invocation, subName, rest, opts) {
+  const task = firstTaskName(rest, '');
+  const linked = Boolean(opts && opts.linked);
+  const yes = linked ? '关联生成 UI' : '生成 UI 设计稿';
+  const picked = await askChoice(
+    ctx,
+    { agent: invocation?.agent, signal: invocation?.signal },
+    {
+      header: 'UI 设计',
+      question: linked
+        ? `「${task || (subName === 'page' ? '新任务' : '当前任务')}」要不要关联前面的 UX / 数据模型文档生成 UI？`
+        : task
+          ? `「${task}」要不要同时生成 UI 设计稿？`
+          : `「${subName === 'page' ? '新任务' : '当前任务'}」要不要同时生成 UI 设计稿？`,
+      options: [
+        {
+          label: yes,
+          description: linked
+            ? '按前面的 UX / 数模文档生成，不另起一套口径'
+            : '选择完成后，与主命令一起执行',
+        },
+        { label: '先不用', description: '只执行主命令' },
+      ],
+    },
+  );
+  return picked === yes || picked === '生成 UI 设计稿';
 }
 
 /**
@@ -1785,27 +2043,32 @@ async function askModeBeforeExecution(ctx, invocation, subName, rest) {
  * page / plan 执行前先问「要不要数模设计」；再问 UI。返回 true 表示要一起做。
  * 没有可用选择框时返回 false，保持非交互环境的旧行为：只执行主命令。
  */
-async function askDbBeforeExecution(ctx, invocation, subName, rest) {
+async function askDbBeforeExecution(ctx, invocation, subName, rest, opts) {
   const task = firstTaskName(rest, '');
+  const fromUx = Boolean(opts && opts.ux);
+  const yes = fromUx ? '根据 UX 生成数模' : '创建数模设计';
   const picked = await askChoice(
     ctx,
     { agent: invocation?.agent, signal: invocation?.signal },
     {
       header: '数模设计',
-      question: task
-        ? `「${task}」要不要同时创建数模设计？`
-        : `「${subName === 'page' ? '新任务' : '当前任务'}」要不要同时创建数模设计？`,
+      question: fromUx
+        ? `「${task || (subName === 'page' ? '新任务' : '当前任务')}」要不要根据刚才的 UX 报告生成数据库设计？`
+        : task
+          ? `「${task}」要不要同时创建数模设计？`
+          : `「${subName === 'page' ? '新任务' : '当前任务'}」要不要同时创建数模设计？`,
       options: [
         {
-          label: '创建数模设计',
-          description:
-            '按 Google 数模规范生成 schema.sql / database.md 与数模图',
+          label: yes,
+          description: fromUx
+            ? '按 UX 复核后的 design.md 与 Google 数模规范生成 schema.sql / database.md 与数模图'
+            : '按 Google 数模规范生成 schema.sql / database.md 与数模图',
         },
         { label: '先不用', description: '只执行主命令' },
       ],
     },
   );
-  return picked === '创建数模设计';
+  return picked === yes;
 }
 
 /**
@@ -1977,6 +2240,10 @@ function registerCommands(ctx) {
       const report = buildReport(run);
       if (run.exitCode !== 0 || parsed.confirm === true) {
         return { kind: run.exitCode === 0 ? 'success' : 'error', text: report };
+      }
+      // 已开工 / 已确认的任务只维护 docs/specs，不再触发「开始执行」
+      if (/只更新 docs\/specs，不自动开工/.test(report)) {
+        return { kind: 'success', text: report };
       }
       // plan 生成成功后自动开工：起操作台 + 让 Agent 按步骤执行（A+B）
       const matched = /prototype\/([^/]+)\/plan\.html/.exec(report);
@@ -2425,6 +2692,353 @@ function registerCommands(ctx) {
     },
   });
   define({
+    name: 'harness-cli-ux',
+    description:
+      '整体 UX 与需求分析：prototype/ux.html 永远覆盖全部任务与项目需求；缺口可逐条关闭，关联任务同步刷新；随后询问更新任务 / 关闭待确认项 / 创建任务流程',
+    input: { hint: '[任务名...] [--user-words "需求"] [--resolve <编号...>] [--apply]' },
+    handler: async (invocation) => {
+      const parsed = parseTaskListInput(invocation?.rawInput);
+      if (parsed.error) return { kind: 'error', text: parsed.error };
+      const resolved = resolveRoot(
+        parsed.root,
+        invocation?.agent?.session?.header?.cwd,
+      );
+      if (resolved.error) return { kind: 'error', text: resolved.error };
+      try {
+        assertDirectory(resolved.root);
+      } catch (error) {
+        return { kind: 'error', text: error.message };
+      }
+      const loaded = readTaskList(resolved.root);
+      if (loaded.error) return { kind: 'error', text: loaded.error };
+
+      let tasks = parsed.tasks.slice();
+      let userWords = parsed.userWords || '';
+      const missing = tasks.filter(
+        (name) => !loaded.tasks.some((task) => task.name === name),
+      );
+      if (missing.length > 0) {
+        return {
+          kind: 'error',
+          text: `没有找到任务：${missing.join('、')}。${taskListHint(loaded.tasks)}\n`,
+        };
+      }
+
+      // 没有显式参数：弹多选框（可全选 / 多选），自定义输入框可以写新需求。
+      // 只给 --resolve 时直接关闭，不再弹任务选择框。
+      const resolving = Array.isArray(parsed.resolve) && parsed.resolve.length > 0;
+      if (tasks.length === 0 && userWords.trim() === '' && !resolving) {
+        if (loaded.tasks.length === 0) {
+          let askError = null;
+          const typed = await askChoice(
+            ctx,
+            { agent: invocation?.agent, signal: invocation?.signal },
+            {
+              header: 'UX 分析',
+              question:
+                '仓库里还没有任务。直接写一段自定义需求（谁、什么场景、要解决什么、什么算做成）：',
+              options: [],
+            },
+            (err) => {
+              askError = err;
+            },
+          );
+          if (typed === null) {
+            return {
+              kind: 'error',
+              text: `没有输入需求${askError ? `（${askError.message}）` : ''}。用法：/harness-cli ux --user-words "需求原文"\n`,
+            };
+          }
+          userWords = typed;
+        } else {
+          let askError = null;
+          const answer = await askMultiChoice(
+            ctx,
+            { agent: invocation?.agent, signal: invocation?.signal },
+            {
+              header: 'UX 分析',
+              question:
+                '整体报告会分析全部任务；勾选要回写 / 继续处理的任务（可多选），也可以在自定义输入里写一段新需求：',
+              options: [
+                {
+                  label: '全部任务',
+                  description: `整体报告已覆盖全部 ${loaded.tasks.length} 个任务；选这项表示后续回写也按全部任务处理`,
+                },
+                ...loaded.tasks.map(taskChoice),
+              ],
+            },
+            (err) => {
+              askError = err;
+            },
+          );
+          if (answer === null) {
+            return {
+              kind: 'success',
+              text:
+                `没有可用的多选框${askError ? `（${askError.message}）` : ''}。直接写：/harness-cli ux <任务名...> ` +
+                `或 /harness-cli ux --user-words "需求原文"。${taskListHint(loaded.tasks)}\n`,
+            };
+          }
+          const picked = answer.selected
+            .filter((name) => name !== '全部任务')
+            .filter((name) => loaded.tasks.some((task) => task.name === name));
+          tasks = answer.selected.includes('全部任务')
+            ? loaded.tasks.map((task) => task.name)
+            : picked;
+          userWords = answer.custom || '';
+        }
+      }
+
+      // 不选任务也照样出整体报告：任务参数只影响回写 / 单任务报告的重点。
+      const baseArgv = [
+        'ux',
+        ...tasks,
+        ...(userWords.trim() ? ['--user-words', userWords] : []),
+        ...(parsed.resolve && parsed.resolve.length > 0
+          ? ['--resolve', parsed.resolve.join(','), '--by', parsed.by || 'UX 分析']
+          : []),
+      ];
+
+      if (parsed.resolve && parsed.resolve.length > 0) {
+        const resolvedRun = await runCli(baseArgv, {
+          cwd: resolved.root,
+          signal: invocation?.signal,
+        });
+        return {
+          kind: resolvedRun.exitCode === 0 ? 'success' : 'error',
+          text: buildReport(resolvedRun),
+        };
+      }
+
+      if (parsed.apply === true) {
+        const run = await runCli([...baseArgv, '--apply'], {
+          cwd: resolved.root,
+          signal: invocation?.signal,
+        });
+        return {
+          kind: run.exitCode === 0 ? 'success' : 'error',
+          text: buildReport(run),
+        };
+      }
+
+      const run = await runCli(baseArgv, {
+        cwd: resolved.root,
+        signal: invocation?.signal,
+      });
+      const report = buildReport(run);
+      if (run.exitCode !== 0) return { kind: 'error', text: report };
+
+      const blocking = /UX 分析仍需补全：(\d+) 处阻断/.exec(report);
+      const gapsFile = /清单：([^\s）)]+)/.exec(report);
+      if (blocking && Number(blocking[1]) > 0) {
+        const prompt = uxFillPrompt(gapsFile ? gapsFile[1] : '', Number(blocking[1]));
+        if (dispatchAgentMessage(invocation?.agent, 'harness-cli-ux', prompt)) {
+          return {
+            kind: 'success',
+            text: `${report}\n已将「UX 补全」消息直接发送到当前对话。\n`,
+          };
+        }
+        return { kind: 'success', text: `${report}\n${prompt}\n` };
+      }
+
+      const openGaps = readUxGaps(resolved.root);
+      const optionUpdate =
+        tasks.length > 0
+          ? {
+              label: '更新这些任务',
+              description: `把报告结论写回 ${tasks.join('、')} 的设计文档（关联任务一并刷新），并继续任务流程`,
+            }
+          : loaded.tasks.length > 0
+            ? {
+                label: '更新现有任务',
+                description: '选择任务后把报告结论写回设计文档（关联任务一并刷新）',
+              }
+            : null;
+      const options = [
+        ...(optionUpdate ? [optionUpdate] : []),
+        ...(openGaps.length > 0
+          ? [
+              {
+                label: '逐条关闭待确认项',
+                description: `当前 ${openGaps.length} 项：勾选已确认 / 已完成的，从清单移除并记录`,
+              },
+            ]
+          : []),
+        {
+          label: '创建新任务',
+          description: '用这次需求建任务页与规范文档，并派发后续流程',
+        },
+        { label: '仅保留报告', description: '先不改任务，只留下 prototype/ux.html' },
+      ];
+      const picked = await askChoice(
+        ctx,
+        { agent: invocation?.agent, signal: invocation?.signal },
+        {
+          header: 'UX 分析完成',
+          question: '报告已生成。接下来要更新任务、关闭已完成的待确认项，还是从这次需求创建新任务？',
+          options,
+        },
+      );
+      if (picked === null || picked === '仅保留报告') {
+        return {
+          kind: 'success',
+          text: `${report}\n已保留报告，未改动任务。需要继续时跑 /harness-cli ux。\n`,
+        };
+      }
+
+      if (picked === '逐条关闭待确认项') {
+        let askError = null;
+        const answer = await askMultiChoice(
+          ctx,
+          { agent: invocation?.agent, signal: invocation?.signal },
+          {
+            header: '关闭待确认项',
+            question:
+              '勾选已经确认 / 已完成的条目（会从待确认清单移除，下次重跑仍保持关闭）：',
+            options: openGaps.slice(0, 40).map((gap) => ({
+              label: `${gap.id} ${gap.task}：${gap.item}`,
+              description: gap.hint,
+            })),
+          },
+          (err) => {
+            askError = err;
+          },
+        );
+        if (answer === null) {
+          return {
+            kind: 'success',
+            text: `${report}\n未关闭任何条目${askError ? `（${askError.message}）` : ''}。\n`,
+          };
+        }
+        const ids = answer.selected
+          .map((item) => String(item).split(/\s+/)[0])
+          .filter((item) => /^G-[0-9a-f]+$/.test(item));
+        if (ids.length === 0) {
+          return { kind: 'success', text: `${report}\n没有勾选待确认编号，未关闭条目。\n` };
+        }
+        const closeRun = await runCli(
+          ['ux', '--resolve', ids.join(','), '--by', 'UX 分析'],
+          { cwd: resolved.root, signal: invocation?.signal },
+        );
+        if (closeRun.exitCode !== 0) {
+          return { kind: 'error', text: `${report}\n${buildReport(closeRun)}` };
+        }
+        return {
+          kind: 'success',
+          text: `${report}\n${buildReport(closeRun)}已关闭 ${ids.length} 项；下次重跑 ux 仍保持关闭。\n`,
+        };
+      }
+
+      if (picked.startsWith('更新')) {
+        let updateNames = tasks;
+        if (updateNames.length === 0) {
+          let askError = null;
+          const answer = await askMultiChoice(
+            ctx,
+            { agent: invocation?.agent, signal: invocation?.signal },
+            {
+              header: '更新任务',
+              question: '勾选要把 UX 结论写回设计文档的任务（可多选）：',
+              options: loaded.tasks.map(taskChoice),
+            },
+            (err) => {
+              askError = err;
+            },
+          );
+          if (answer === null) {
+            return {
+              kind: 'success',
+              text: `没有选择任务${askError ? `（${askError.message}）` : ''}，未改动任务。\n`,
+            };
+          }
+          updateNames = answer.selected.filter((name) =>
+            loaded.tasks.some((task) => task.name === name),
+          );
+        }
+        if (updateNames.length === 0) {
+          return { kind: 'success', text: '没有选择任务，未改动任务。\n' };
+        }
+        const applyRun = await runCli(
+          [
+            'ux',
+            '--apply',
+            ...updateNames,
+            ...(userWords.trim() ? ['--user-words', userWords] : []),
+          ],
+          { cwd: resolved.root, signal: invocation?.signal },
+        );
+        if (applyRun.exitCode !== 0) {
+          return { kind: 'error', text: buildReport(applyRun) };
+        }
+        const prompt = uxUpdatePrompt(
+          updateNames.map((name) => ({ name })),
+        );
+        const dispatched = dispatchAgentMessage(
+          invocation?.agent,
+          'harness-cli-ux-update',
+          prompt,
+        );
+        return {
+          kind: 'success',
+          text:
+            `${report}\n${buildReport(applyRun)}\n` +
+            (dispatched
+              ? '已把「按 UX 报告更新任务」的执行请求发送到当前对话。\n'
+              : `未能自动发送执行请求。把下面这段交给 Agent：\n\n${prompt}\n`),
+        };
+      }
+
+      if (picked === '创建新任务') {
+        const suggested = suggestUxTaskName(userWords);
+        const typed = await askChoice(
+          ctx,
+          { agent: invocation?.agent, signal: invocation?.signal },
+          {
+            header: '新任务名',
+            question: `给它起个任务名（默认「${suggested}」，也可以直接输入）：`,
+            options: [
+              { label: suggested, description: '使用默认任务名' },
+            ],
+          },
+        );
+        const name = String(typed || '').trim();
+        if (name.length === 0) {
+          return { kind: 'success', text: '没有输入任务名，未创建任务。\n' };
+        }
+        if (!isValidTaskName(name)) {
+          return {
+            kind: 'error',
+            text: `任务名不合法：${name}（只能用字母 / 数字 / 中文 / 中划线 / 下划线，不能有空格或标点）\n`,
+          };
+        }
+        const words = userWords.trim() || '按 prototype/ux.html 的 UX 报告创建任务';
+        const pageRun = await runCli(
+          ['page', name, '--user-words', words],
+          { cwd: resolved.root, signal: invocation?.signal },
+        );
+        if (pageRun.exitCode !== 0) {
+          return { kind: 'error', text: buildReport(pageRun) };
+        }
+        const prompt = uxCreatePrompt(name, userWords.trim());
+        const dispatched = dispatchAgentMessage(
+          invocation?.agent,
+          'harness-cli-ux-create',
+          prompt,
+        );
+        return {
+          kind: 'success',
+          text:
+            `${report}\n${buildReport(pageRun)}\n` +
+            (dispatched
+              ? '已把「按 UX 报告发起任务流程」的执行请求发送到当前对话。\n'
+              : `未能自动发送执行请求。把下面这段交给 Agent：\n\n${prompt}\n`),
+        };
+      }
+
+      return { kind: 'success', text: `${report}\n` };
+    },
+  });
+  define({
     name: 'harness-cli-ui',
     description:
       '给任务生成 / 更新 UI 设计稿（Ant Design v5 风格，prototype/<task>/ui/）',
@@ -2486,7 +3100,7 @@ function registerCommands(ctx) {
     name: 'harness-cli-wiki',
     description:
       '生成 docs/wiki 并自动发起「反推补全」：推不出的位置交给当前对话继续补，直到 0 缺口',
-    input: { hint: '[root] [--update|--keep|--check]' },
+    input: { hint: '[root] [--update|--keep] [--check]' },
     handler: async (invocation) => {
       const parsed = parseCommandInput(invocation?.rawInput);
       if (parsed.error) return { kind: 'error', text: parsed.error };
@@ -2507,7 +3121,7 @@ function registerCommands(ctx) {
           ? ['--update']
           : parsed.keep === true
             ? ['--keep']
-            : []),
+            : ['--merge']),
       ];
       const run = await runCli(argv, {
         cwd: resolved.root,
@@ -2833,7 +3447,7 @@ function registerCommands(ctx) {
   ctx.commands.register({
     name: 'harness-cli',
     description:
-      'Harness-CLI 指令：初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 推进度 / 继续任务 / 重跑任务 / UI 设计 / 数据库设计 / 删除任务 / 业务 wiki / 总览',
+      'Harness-CLI 指令：初始化 / 校验 / 自检 / 建任务 / 方案 / 复盘 / 继续任务 / 重跑任务 / UI 设计 / 数据库设计 / 删除任务 / 业务 wiki / 总览（推进度仍可用 /harness-cli progress 直接调用）',
     input: { hint: '请输入自定义语义' },
     handler: async (invocation) => {
       const tokens =
@@ -2875,6 +3489,7 @@ function registerCommands(ctx) {
           (err) => {
             askError = err;
           },
+          { feedback: (selected) => !selected.includes('帮助') },
         );
         if (picked === null) {
           const reason =
@@ -2931,7 +3546,7 @@ function registerCommands(ctx) {
         const parts = rest.match(/"[^"]*"|'[^']*'|\S+/g) || [];
         const head = parts[0] || '';
         const hasWords = parts.includes('--user-words');
-        if (head.length > 0 && !isValidTaskName(head)) {
+        if (head.length > 0 && !head.startsWith('-') && !isValidTaskName(head)) {
           const original = rest.replace(/^["']|["']$/g, '').trim();
           let askError = null;
           const typed = await askChoice(
@@ -2964,6 +3579,7 @@ function registerCommands(ctx) {
             : name;
         } else if (
           !hasWords &&
+          isValidTaskName(head) &&
           WORDS_SUBS.includes(subName) &&
           !parts.slice(1).some((item) => item.startsWith('-'))
         ) {
@@ -2973,6 +3589,33 @@ function registerCommands(ctx) {
             rest = `${head} --user-words "${extras.join(' ').replace(/"/g, '\\"')}"`;
           }
         }
+      }
+
+      // 帮助：不带指令名时先弹选择框列出所有指令；跳过 / 取消就看完整帮助（非必选）
+      let helpChain = null;
+      if (subName === 'help' && rest.length === 0) {
+        const topics = helpTopicOptions();
+        const picked = await askChoice(
+          ctx,
+          { agent: invocation?.agent, signal: invocation?.signal },
+          {
+            header: '帮助',
+            question:
+              '选择指令后缀（例如 delete → /harness-cli help delete）；直接跳过就看完整帮助。',
+            options: topics.map((item) => ({
+              label: item.label,
+              description: item.description,
+            })),
+          },
+          undefined,
+          { feedback: false },
+        );
+        const hit = topics.find(
+          (item) => item.label === picked || item.value === picked,
+        );
+        if (hit && hit.value) rest = hit.value;
+        // 选择链并进结果卡片：卡片在上、消息在下，单独发「已选择」必然排在卡片之后。
+        helpChain = hit && hit.value ? `已选择：帮助 → ${hit.value}` : '已选择：帮助';
       }
 
       // 从菜单选「任务总览」：自动带 serve，并弹窗问端口（非必填，留空=随机端口）
@@ -3003,7 +3646,7 @@ function registerCommands(ctx) {
         }
       }
 
-      // page / plan：先定操作模式，再问数模设计，最后问 UI 设计；选择完成前不执行任何主命令
+      // page：先定操作模式，再按 UX → 数模 → UI 的顺序问附加产物；plan 只写 docs/specs，不再追问这些
       const mode =
         (subName === 'page' || subName === 'plan') &&
         (await askModeBeforeExecution(ctx, invocation, subName, rest));
@@ -3016,12 +3659,15 @@ function registerCommands(ctx) {
       ) {
         rest = `${rest} --by "自动 loop"`;
       }
+      const includeUx =
+        subName === 'page' &&
+        (await askUxBeforeExecution(ctx, invocation, subName, rest));
       const includeDb =
-        (subName === 'page' || subName === 'plan') &&
-        (await askDbBeforeExecution(ctx, invocation, subName, rest));
+        subName === 'page' &&
+        (await askDbBeforeExecution(ctx, invocation, subName, rest, {ux: includeUx}));
       const includeUi =
-        (subName === 'page' || subName === 'plan') &&
-        (await askUiBeforeExecution(ctx, invocation, subName, rest));
+        subName === 'page' &&
+        (await askUiBeforeExecution(ctx, invocation, subName, rest, {linked: includeUx || includeDb}));
 
       // page / agents 只有 CLI 与工具、没有独立斜杠命令：这里直接跑 CLI
       let result;
@@ -3051,7 +3697,9 @@ function registerCommands(ctx) {
         if (!leaf) {
           return {
             kind: 'error',
-            text: `未知子指令：${sub}。可用：${SUBCOMMANDS.map((item) => item.sub).join(' / ')}`,
+            text: `未知子指令：${sub}。可用：${leaves
+              .map((definition) => definition.name.replace(/^harness-cli-/, ''))
+              .join(' / ')}`,
           };
         }
         // 子指令的 handler 与原来逐条注册时完全一致，只是参数换成聚合指令后面的部分
@@ -3075,6 +3723,40 @@ function registerCommands(ctx) {
             writeTaskMode(resolvedRoot.root, config, task, mode);
           } catch (err) {
             // 模式写入失败不拦主命令；方案确认会回到弹窗。
+          }
+        }
+      }
+
+      // UX 选择已经完成：先生成报告，并把结论回写 design.md，供后续数模 / UI 关联
+      if (includeUx && result && result.kind === 'success') {
+        const task = firstTaskName(rest, result.text);
+        const resolvedRoot = resolveRoot(
+          undefined,
+          invocation?.agent?.session?.header?.cwd,
+        );
+        if (task && !resolvedRoot.error) {
+          const uxRun = await runCli(['ux', task], {
+            cwd: resolvedRoot.root,
+            signal: invocation?.signal,
+          });
+          if (uxRun.exitCode === 0) {
+            const applyRun = await runCli(['ux', '--apply', task], {
+              cwd: resolvedRoot.root,
+              signal: invocation?.signal,
+            });
+            result = {
+              ...result,
+              kind: applyRun.exitCode === 0 ? result.kind : 'error',
+              text:
+                `${result.text}\n已执行 /harness-cli ux ${task}（含 --apply）\n` +
+                `${buildReport(uxRun)}\n${buildReport(applyRun)}`,
+            };
+          } else {
+            result = {
+              ...result,
+              kind: 'error',
+              text: `${result.text}\nUX 报告生成失败\n${buildReport(uxRun)}`,
+            };
           }
         }
       }
@@ -3108,6 +3790,7 @@ function registerCommands(ctx) {
             (definition) => definition.name === 'harness-cli-ui',
           );
           if (ui) {
+            const linked = includeUx || includeDb;
             const uiResult = await ui.handler({
               ...invocation,
               rawInput: task,
@@ -3115,7 +3798,9 @@ function registerCommands(ctx) {
             result = {
               ...result,
               kind: uiResult.kind === 'error' ? 'error' : result.kind,
-              text: `${result.text}\n已执行 /harness-cli ui ${task}\n${uiResult.text}`,
+              text:
+                `${result.text}\n已执行 /harness-cli ui ${task}` +
+                `${linked ? '（已关联前面的文档）' : ''}\n${uiResult.text}`,
             };
           }
         }
@@ -3147,8 +3832,12 @@ function registerCommands(ctx) {
         }
       }
 
+      if (helpChain && result && typeof result.text === 'string') {
+        result = { ...result, text: `${helpChain}\n\n${result.text}` };
+      }
+
       // 让「到底跑了哪条指令」在对话里显式可见（聚合入口只显示 /harness-cli）
-      if (result && typeof result.text === 'string' && fromMenu) {
+      if (result && typeof result.text === 'string' && fromMenu && !helpChain) {
         return {
           ...result,
           text: `已执行 /harness-cli ${subName}${rest ? ` ${rest}` : ''}\n\n${result.text}`,

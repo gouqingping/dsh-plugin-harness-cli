@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-harness-cli",
-  "version": "0.1.5",
+  "version": "0.1.6-rc",
   "description": "Generate and validate Harness project configuration: AGENTS.md, gates, specs, progress, and business wiki.",
   "author": {
     "name": "gouqingping",
@@ -24,7 +24,7 @@
   "interface": {
     "displayName": "Harness CLI",
     "shortDescription": "Generate and validate project collaboration files",
-    "longDescription": "Install a shared Harness workflow for AGENTS.md, environment and gate scripts, feature scope, state files, DDD/SDD/TDD task docs, progress pages, database design with ER diagrams, and business-facing wiki documents. The plugin exposes the same 13 harness_cli_* tools in Codex and DSH.",
+    "longDescription": "Install a shared Harness workflow for AGENTS.md, environment and gate scripts, feature scope, state files, DDD/SDD/TDD task docs, progress pages, database design with ER diagrams, and business-facing wiki documents. The plugin exposes the same 14 harness_cli_* tools in Codex and DSH.",
     "developerName": "gouqingping",
     "category": "Developer Tools",
     "capabilities": [

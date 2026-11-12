@@ -22,6 +22,13 @@ const {applyWiki, planWiki, wikiStatus, collectFacts, wikiGaps, writeGapReport, 
 const {syncDesignFromUi, syncProposalFromWiki} = require('./sync');
 const {uiGaps, writeUiGapReport} = require('./ui');
 const {
+  collectUxFacts,
+  writeUxReports,
+  applyUxContext,
+  resolveUxGaps,
+  saveUxRequirements,
+} = require('./ux');
+const {
   parseSchema,
   lintModel,
   renderMermaid,
@@ -41,6 +48,7 @@ const {
 } = require('./plans');
 const {defaultModel, mergeFlags, renderDocs, applyToPage, applyToPlan} = require('./specs');
 const {loadTemplate} = require('./templates');
+const {PROCESS_TEXT, isProcessTopic} = require('./process');
 const {render} = require('./render');
 const {exists, isDir, isText, isTaskName, writeFileSafe, toPosix, today} = require('./util');
 
@@ -51,9 +59,9 @@ const USAGE = `dsh-plugin-harness-cli ${VERSION} —— 公共项目配置工具
 用法：
   dsh-plugin-harness-cli init [--preset prototype] [--force] [--force-state] [--dry-run]
   dsh-plugin-harness-cli agents [--stdout] [--force] [--dry-run]
-  dsh-plugin-harness-cli page <任务名> [--user-words "原话"]
+  dsh-plugin-harness-cli page <任务名> [--user-words "原话"]   # DSH 侧会追问 UX / 数模 / UI
   dsh-plugin-harness-cli review [任务名] [--agent <标识>]        # 复盘 docs/specs 与任务页（省略任务名=最近的任务）
-  dsh-plugin-harness-cli plan [任务名] [--confirm --by "确认人"] [--user-words "原话"]
+  dsh-plugin-harness-cli plan [任务名] [--confirm --by "确认人"] [--user-words "原话"]  # 只写 docs/specs；未开工时补齐页面骨架
   dsh-plugin-harness-cli progress <任务名> [--step N --pct 0..100] [--status 进行中|待验收|完成] [--note "说明"]
   dsh-plugin-harness-cli ui [任务名] [--user-words "原话"] [--force]   （省略任务名=最近的任务）
   dsh-plugin-harness-cli sql [任务名] [--dry-run]                   # 按 Google 数模规范生成 / 校验 schema 与 ER 数模图
@@ -61,9 +69,10 @@ const USAGE = `dsh-plugin-harness-cli ${VERSION} —— 公共项目配置工具
   dsh-plugin-harness-cli check [--strict] [--json]
   dsh-plugin-harness-cli doctor [--json]
   dsh-plugin-harness-cli plans [serve [端口] | stop]   # 省略端口=随机安全端口；指定端口被占用会强制接管
-  dsh-plugin-harness-cli wiki [--update|--keep|--ask] [--check] [--dry-run] [--json]
+  dsh-plugin-harness-cli wiki [--merge|--update|--keep] [--check] [--dry-run] [--json]
+  dsh-plugin-harness-cli ux [任务名...] [--user-words "自定义需求"] [--resolve <编号...>] [--by "确认人"] [--apply] [--dry-run] [--json]
   dsh-plugin-harness-cli style <harness-style 参数...>
-  dsh-plugin-harness-cli version | help
+  dsh-plugin-harness-cli version | help [process]   # help process 查看完整任务流程（别名：flow / workflow / 流程）
 
 style 子命令把参数原样转给随包的 harness-style（代码风格 / 提交信息判定）：
   style doctor | style check --staged | style fix --staged | style commit-msg <file>
@@ -81,11 +90,22 @@ sql 数据库设计（schema.sql 是唯一真源，省略任务名=最近的任�
   退出码 1 表示 schema 还是空的，或有 lint 错误；按提示补 schema.sql 后重跑。
 
 wiki 生成 / 更新 docs/wiki（13 篇业务文档，正文是业务白话，不写命令与代码）：
-  --update      受管区块一律更新；没有受管区块的既有文档会补区块、正文原样保留
-  --keep        只创建缺失文件，冲突文件保留不写
-  --ask         冲突时逐个询问（默认；非交互环境视为保留并以退出码 1 报告）
-  --check       只报告：缺失 / 过期 / 待接管 / 冲突，不写盘
+  默认（--merge）增量合并：人工段落保留，事实（数量 / 状态 / 清单）按本次扫描刷新；
+                没有受管区块的既有文档会补区块、原文原样保留
+  --update      受管区块整块重写（回到生成器基线，人工段落会被覆盖）
+  --keep        只创建缺失文件，已有文件一个字都不动
+  --check       只报告：缺失 / 过期 / 待接管 / 标记损坏，不写盘
+  业务内容从 docs/specs 的提案 / 契约 / 设计、docs/adr 反推，推不出的才写「待业务确认」
   业务域下钻页只在配置的 dirs 里声明了 name（业务名）时生成，不拿目录名当业务域
+
+ux 用户体验与需求分析（整体报告永远覆盖全部任务：prototype/ux.html；单任务 prototype/<任务>/ux/index.html）：
+  默认          分析全部任务 + docs/ux/requirements.md 里的项目需求，按维度优先级出报告
+  --user-words  新增项目需求；会并入 docs/ux/requirements.md，后续重跑不会丢
+  --resolve     逐条关闭待确认项（可多次或逗号分隔），记录在 prototype/.ux-resolved.json
+  --by          关闭人（默认「用户」）
+  --apply       把结论写回选中任务及其关联任务的 design.md（UX 复核区块）
+  --dry-run     只打印将写入的文件，不落盘
+  分析只基于仓库里已写下的事实；补完文档重跑会自动移除已修好的条目
 
 通用参数：
   --root <dir>   目标仓库根目录（默认 cwd）
@@ -96,7 +116,16 @@ wiki 生成 / 更新 docs/wiki（13 篇业务文档，正文是业务白话，�
 
 退出码：0 通过 / 1 有违规 / 2 工具或用法有错`;
 
-const PLAN_TAG = {create: 'CREATE', overwrite: 'WRITE', keep: 'KEEP', append: 'APPEND', update: 'UPDATE', conflict: 'CONFLICT'};
+const PLAN_TAG = {
+  create: 'CREATE',
+  overwrite: 'WRITE',
+  keep: 'KEEP',
+  append: 'APPEND',
+  update: 'UPDATE',
+  merge: 'MERGE',
+  adopt: 'ADOPT',
+  conflict: 'CONFLICT',
+};
 const LEVEL_TAG = {ok: 'OK', warn: 'WARN', error: 'ERR'};
 
 function parseArgs(argv) {
@@ -112,11 +141,11 @@ function parseArgs(argv) {
   };
   const positional = [];
   const unknown = [];
-  const repeatable = new Set(['term', 'aggregate', 'invariant', 'contract', 'accept', 'step', 'non-goal']);
+  const repeatable = new Set(['term', 'aggregate', 'invariant', 'contract', 'accept', 'step', 'non-goal', 'resolve']);
   const valueFlags = new Set([
     'root', 'preset', 'user-words', 'dir', 'step', 'pct', 'status', 'note', 'agent', 'by',
     'goal', 'scope', 'context', 'term', 'aggregate', 'invariant', 'contract', 'accept', 'non-goal', 'input-json',
-    'port',
+    'port', 'resolve',
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -136,6 +165,8 @@ function parseArgs(argv) {
     else if (key === 'force-state') flags.forceState = true;
     else if (key === 'stdout') flags.stdout = true;
     else if (key === 'strict') flags.strict = true;
+    else if (key === 'apply') flags.apply = true;
+    else if (key === 'merge') flags.wikiMode = 'merge';
     else if (key === 'update' || key === 'auto') flags.wikiMode = 'auto';
     else if (key === 'keep') flags.wikiMode = 'keep';
     else if (key === 'ask') flags.wikiMode = 'ask';
@@ -740,7 +771,10 @@ function ensureTask(root, flags, task) {
   if (boot.dryRun) return {dryRun: true};
   const ctx = buildContext(boot.config, {task, userWords: flags.userWords || ''});
   const pageFile = path.join(root, ctx.prototype.dir, task, ctx.prototype.progressPage);
-  if (!exists(pageFile)) {
+  const pageExisted = exists(pageFile);
+  const planFile = path.join(root, ctx.prototype.dir, task, 'plan.html');
+  const planExisted = exists(planFile);
+  if (!pageExisted) {
     const code = cmdPage(root, {
       args: [task],
       userWords: flags.userWords,
@@ -750,12 +784,11 @@ function ensureTask(root, flags, task) {
     });
     if (code !== 0) return {error: code};
   }
-  const planFile = path.join(root, ctx.prototype.dir, task, 'plan.html');
   if (!exists(planFile)) {
     writeFileSafe(planFile, render(loadTemplate('prototypePlan'), ctx));
     process.stdout.write(`  CREATE  ${path.relative(root, planFile)}（方案页，确认后才开工）\n`);
   }
-  return {config: boot.config, ctx};
+  return {config: boot.config, ctx, pageExisted, planExisted};
 }
 
 /**
@@ -825,8 +858,10 @@ function totalOf(values) {
 }
 
 /**
- * plan：任务方案页（先定方案，再开工）。
- * 生成 `prototype/<任务>/plan.html`；`--confirm --by <人>` 把状态改为「已确认」。
+ * plan：补全 / 更新任务的 docs/specs。
+ * - 只写 `docs/specs/<任务>/`；未开工时顺带补齐任务页 / 方案页骨架；
+ * - 已开工（总进度 > 0）或方案已确认后，不再改写 `prototype` 下的页面；
+ * - `--confirm --by <人>` 只更新方案页的已确认状态。
  */
 function cmdPlan(root, flags) {
   let pickedConfig;
@@ -853,7 +888,7 @@ function cmdPlan(root, flags) {
   }
 
   if (!flags.confirm) {
-  // 用模型把 docs/specs 四份文档、任务页与方案页一次补全（人随时可以改）
+  // 用模型把 docs/specs 的文档补全（人随时可以改）；任务页与方案页不在这里改写
   let model;
   try {
     model = mergeFlags(defaultModel({task, userWords: flags.userWords}), flags);
@@ -879,31 +914,37 @@ function cmdPlan(root, flags) {
     rows.push(`  ${current === null ? 'CREATE' : 'WRITE '}   ${path.relative(root, abs)}`);
   }
 
+  // plan 只负责 docs/specs；只有「未开工（总进度 0）且方案未确认」的骨架页才顺带补齐，
+  // 一旦有进度或人工确认，prototype 下的页面就不再被 plan 改写。
   const pageFile = path.join(root, ready.ctx.prototype.dir, task, ready.ctx.prototype.progressPage);
   const pageHtml = readIfExistsFile(pageFile) || '';
   const total = totalOf(readStepPcts(pageHtml));
-  let pageAction = 'KEEP';
-  if (pageHtml.length > 0 && (total === 0 || flags.force)) {
+  const planFile = path.join(root, ready.ctx.prototype.dir, task, 'plan.html');
+  let planHtml = readIfExistsFile(planFile) || '';
+  const confirmed = /data-plan-status="已确认"/.test(planHtml);
+  const canSync = total === 0 && !confirmed;
+
+  if (canSync && pageHtml.length > 0) {
     writeFileSafe(pageFile, applyToPage(pageHtml, model));
-    pageAction = 'WRITE';
-    rows.push(`  ${pageAction}   ${path.relative(root, pageFile)}（契约 / 用例 / 规划已同步）`);
-  } else if (pageHtml.length === 0) {
-    pageAction = 'MISSING';
+    rows.push(`  WRITE   ${path.relative(root, pageFile)}（未开工：契约 / 用例 / 规划已同步）`);
   } else {
-    rows.push(`  KEEP    ${path.relative(root, pageFile)}（已有进度 ${total}%，不覆盖；要重写加 --force）`);
+    rows.push(
+      `  KEEP    ${path.relative(root, pageFile)}（${total > 0 ? `已有进度 ${total}%` : '已确认'}，plan 只写 docs/specs）`
+    );
   }
 
-  let planHtml = readIfExistsFile(planFile) || '';
-  if (planHtml.length > 0 && !/id="business-flow"/.test(planHtml)) {
-    // 老任务升级：从当前模板取「业务流程图」区块插到目标前，再由 applyToPlan 填内容。
-    const fresh = render(loadTemplate('prototypePlan'), ready.ctx);
-    const section = /(<section id="business-flow"[\s\S]*?<\/section>)/.exec(fresh);
-    if (section) planHtml = planHtml.replace(/(<section id="goal")/, `${section[1]}\n\n  $1`);
-  }
-  if (planHtml.length > 0 && (!/data-plan-status="已确认"/.test(planHtml) || flags.force)) {
+  if (canSync && planHtml.length > 0) {
+    if (!/id="business-flow"/.test(planHtml)) {
+      // 老任务升级：从当前模板取「业务流程图」区块插到目标前，再由 applyToPlan 填内容。
+      const fresh = render(loadTemplate('prototypePlan'), ready.ctx);
+      const section = /(<section id="business-flow"[\s\S]*?<\/section>)/.exec(fresh);
+      if (section) planHtml = planHtml.replace(/(<section id="goal")/, `${section[1]}\n\n  $1`);
+    }
     model.hasUi = exists(path.join(root, ready.ctx.prototype.dir, task, 'ui', 'index.html'));
     writeFileSafe(planFile, applyToPlan(planHtml, model));
-    rows.push(`  WRITE   ${path.relative(root, planFile)}（目标 / 方案 / 流程 / 风险 / 验收已同步）`);
+    rows.push(`  WRITE   ${path.relative(root, planFile)}（未开工：目标 / 方案 / 流程 / 风险 / 验收已同步）`);
+  } else if (planHtml.length > 0) {
+    rows.push(`  KEEP    ${path.relative(root, planFile)}（已确认，plan 只写 docs/specs）`);
   }
 
   // 文档写完后再对齐 UI 设计与业务 wiki 的事实（有就同步，没有就跳过）
@@ -919,7 +960,10 @@ function cmdPlan(root, flags) {
 
   process.stdout.write(`dsh-plugin-harness-cli plan → ${task}\n`);
   for (const row of rows) process.stdout.write(`${row}\n`);
-  process.stdout.write(`  规范文档：写入 ${written} 篇，保留 ${kept} 篇\n`);
+  process.stdout.write(`  规范文档：写入 ${written} 篇，保留 ${kept} 篇（已开工 / 已确认的任务只动 docs/specs）\n`);
+  if (!canSync) {
+    process.stdout.write('  NOTE    已开工 / 已确认：只更新 docs/specs，不自动开工\n');
+  }
   }
 
   if (flags.confirm) {
@@ -1071,6 +1115,33 @@ function syncTaskQueue(root, config, task, artifacts) {
   return result;
 }
 
+/**
+ * 老任务页升级：补上「步骤流程」区块与脚本。
+ * 新模板已经自带；旧页面在下次 progress 命中时补齐，避免每个任务各跑一次 page --force。
+ * @param {string} html - 现有任务页 HTML。
+ * @param {object} config - 生效配置。
+ * @param {string} task - 任务名。
+ * @returns {{html: string, upgraded: boolean}} 补齐后的 HTML 与是否发生升级。
+ */
+function ensureProgressFlow(html, config, task) {
+  if (!html || html.includes('data-flow')) return {html, upgraded: false};
+  const ctx = buildContext(config, {task});
+  const fresh = render(loadTemplate('progressHtml'), {...ctx, today: today()});
+  const section = /(<section class="flow">[\s\S]*?<\/section>)/.exec(fresh);
+  const script = /(<script data-progress-flow>[\s\S]*?<\/script>)/.exec(fresh);
+  if (!section || !script) return {html, upgraded: false};
+  const withSection = html.replace(
+    /(\s*)(<section class="domain ddd">)/,
+    (match, space, tag) => `\n\n  ${section[1]}\n\n${tag}`
+  );
+  if (withSection === html) return {html, upgraded: false};
+  const next = withSection.replace(
+    /\s*<\/body>/,
+    () => `\n${script[1]}\n</body>`
+  );
+  return {html: next, upgraded: true};
+}
+
 function cmdProgress(root, flags) {
   const task = flags.args && flags.args[0];
   if (!isText(task)) return fail('用法：dsh-plugin-harness-cli progress <任务名> [--step N --pct 0..100] [--status ...]');
@@ -1102,6 +1173,8 @@ function cmdProgress(root, flags) {
 
   const pageFile = path.join(root, ctx.prototype.dir, task, ctx.prototype.progressPage);
   let html = fs.readFileSync(pageFile, 'utf8');
+  const flowUpgrade = ensureProgressFlow(html, config, task);
+  if (flowUpgrade.upgraded) html = flowUpgrade.html;
   const pct = flags.pct === undefined ? undefined : Number(flags.pct);
   const stepNo = flags.step === undefined ? undefined : Number(flags.step);
   const status = flags.status === undefined ? undefined : String(flags.status);
@@ -1175,6 +1248,9 @@ function cmdProgress(root, flags) {
   if (pct !== undefined) process.stdout.write(`  第 ${stepNo} 步 → ${pct}%\n`);
   if (status !== undefined) process.stdout.write(`  状态 → ${status}\n`);
   process.stdout.write(`  总进度 ${total}%（已追加记录、已同步总览）\n`);
+  if (flowUpgrade.upgraded) {
+    process.stdout.write('  已补「步骤流程」区块（老任务页升级）\n');
+  }
   if (gateNotes.length > 0) {
     for (const note of gateNotes) process.stdout.write(`  提醒：${note}\n`);
   }
@@ -1300,26 +1376,6 @@ function cmdDoctor(root, flags) {
   return result.summary.errors > 0 ? 2 : 0;
 }
 
-/** 同步读一行（仅在 TTY 下用；非 TTY 由调用方按「保留」处理）。 */
-function askSync(question) {
-  process.stdout.write(question);
-  const buf = Buffer.alloc(64);
-  try {
-    const n = fs.readSync(process.stdin.fd, buf, 0, buf.length, null);
-    return buf.toString('utf8', 0, n).trim().toLowerCase();
-  } catch (err) {
-    return 'n';
-  }
-}
-
-/**
- * wiki：生成 / 更新 docs/wiki。
- *
- * 冲突（受管区块被人工改过）的处理取决于模式：
- * - ask（默认）：TTY 下逐个询问；非 TTY 视为保留，退出码 1 并在 stderr 给出下一步。
- * - auto（--update）：一律覆盖受管区块，区块外内容仍然不动。
- * - keep（--keep）：只创建缺失文件，冲突文件保留。
- */
 /**
  * plans：在根目录生成任务总览 plans.html（列表 / 展开编辑 / UI 预览 / 删除 / 重跑）。
  * `--serve` 起一个只监听本机的 HTTP 服务，页面上的按钮才会真正落盘。
@@ -1465,13 +1521,24 @@ function cmdPlans(root, flags) {
   return 0;
 }
 
+/**
+ * wiki：生成 / 更新 docs/wiki。
+ *
+ * - 默认 merge：受管区块与上次生成做三路合并，人工段落保留、事实刷新；
+ *   没有受管区块的既有文档补区块并原样保留正文。
+ * - auto / --update：整块重写受管区块（人工段落会被覆盖）。
+ * - keep / --keep：只创建缺失文件。
+ * 只有「受管区块标记不完整」才报冲突并返回 1。
+ */
 function cmdWiki(root, flags) {
   const {config} = loadConfig(root);
   const dir = flags.dir || config.paths.wiki || 'docs/wiki';
-  const mode = flags.wikiMode || (config.wiki && config.wiki.mode) || 'ask';
+  const rawMode = flags.wikiMode || (config.wiki && config.wiki.mode) || 'merge';
+  // ask 是旧默认名，语义等同增量合并（不再逐个询问）
+  const mode = rawMode === 'ask' ? 'merge' : rawMode;
 
-  if (mode !== 'ask' && mode !== 'auto' && mode !== 'keep') {
-    return fail(`未知的 wiki 模式：${mode}（可用：ask / auto / keep）`);
+  if (mode !== 'merge' && mode !== 'auto' && mode !== 'keep') {
+    return fail(`未知的 wiki 模式：${mode}（可用：merge / auto / keep）`);
   }
 
   if (flags.check) {
@@ -1482,36 +1549,26 @@ function cmdWiki(root, flags) {
       process.stdout.write(`dsh-plugin-harness-cli wiki --check → ${root}\n`);
       process.stdout.write(`  目录：${dir}${status.exists ? '' : '（不存在）'}\n`);
       if (status.missing.length) process.stdout.write(`  缺少：${status.missing.join(', ')}\n`);
-      if (status.stale.length) process.stdout.write(`  过期：${status.stale.join(', ')}\n`);
-      if (status.conflicts.length) {
-        const adoptable = new Set(status.adoptable || []);
-        const adopt = status.conflicts.filter((name) => adoptable.has(name));
-        const edited = status.conflicts.filter((name) => !adoptable.has(name));
-        if (adopt.length) {
-          process.stdout.write(`  待接管（无受管区块；--update 会补区块并原样保留正文）：${adopt.join(', ')}\n`);
-        }
-        if (edited.length) {
-          process.stdout.write(`  冲突（受管区块被人工改过）：${edited.join(', ')}\n`);
-        }
+      if (status.stale.length) process.stdout.write(`  过期（重跑会合并事实）：${status.stale.join(', ')}\n`);
+      if (status.adoptable.length) {
+        process.stdout.write(`  待接管（无受管区块；重跑会补区块并原样保留正文）：${status.adoptable.join(', ')}\n`);
       }
-      if (!status.missing.length && !status.stale.length && !status.conflicts.length) {
+      if (status.conflicts.length) {
+        process.stdout.write(`  冲突（受管区块标记不完整，需手工修）：${status.conflicts.join(', ')}\n`);
+      }
+      if (
+        !status.missing.length &&
+        !status.stale.length &&
+        !status.adoptable.length &&
+        !status.conflicts.length
+      ) {
         process.stdout.write('  全部为最新 ✓\n');
       }
     }
-    return status.missing.length || status.stale.length || status.conflicts.length ? 1 : 0;
+    return status.missing.length || status.stale.length || status.adoptable.length || status.conflicts.length ? 1 : 0;
   }
 
-  const interactive = mode === 'ask' && !flags.dryRun && process.stdin.isTTY;
-  const ask = interactive
-    ? (entry) => {
-        const answer = askSync(`  ${entry.name}：${entry.reason}。更新？[y] 更新 / [n] 保留 / [a] 本页及后续全部更新：`);
-        if (answer === 'a' || answer === 'all') return 'update-all';
-        if (answer === 'y' || answer === 'yes' || answer === '') return 'update';
-        return 'keep';
-      }
-    : undefined;
-
-  const result = applyWiki(root, {mode, dryRun: flags.dryRun, dir, ask});
+  const result = applyWiki(root, {mode, dryRun: flags.dryRun, dir});
   const byAction = (name) => result.entries.filter((entry) => entry.action === name);
 
   if (flags.json) {
@@ -1531,14 +1588,16 @@ function cmdWiki(root, flags) {
     const reason = entry.reason ? `（${entry.reason}）` : '';
     process.stdout.write(`  ${pad(tag, 9)} ${dir}/${entry.name}${reason}\n`);
   }
-  const changed = result.changed;
-  process.stdout.write(
-    `\n${flags.dryRun ? '（dry-run，未落盘）' : `已写入 ${changed} 篇`}；` +
-      `跳过 ${byAction('keep').length} 篇，冲突 ${result.conflicts.length} 篇\n`
-  );
+  const parts = [
+    flags.dryRun ? '（dry-run，未落盘）' : `已写入 ${result.changed} 篇`,
+    `跳过 ${byAction('keep').length} 篇`,
+  ];
+  if (result.kept > 0) parts.push(`保留人工段落 ${result.kept} 处`);
+  if (result.conflicts.length > 0) parts.push(`冲突 ${result.conflicts.length} 篇`);
+  process.stdout.write(`\n${parts.join('；')}\n`);
 
   // 业务文档变了，任务的 proposal 也要跟着更新（写回受管区块 + 指纹）
-  if (flags.dryRun) return result.conflicts.length && mode !== 'keep' ? 1 : 0;
+  if (flags.dryRun) return result.conflicts.length ? 1 : 0;
   const facts = collectFacts(root);
   const proposalSync = syncProposalFromWiki(root, config.paths, () => ({
     project: `${facts.project.name} v${facts.project.version}`,
@@ -1552,7 +1611,9 @@ function cmdWiki(root, flags) {
   // 生成只是第一步：再反推一遍工作区，把仍无法推导的位置列出来
   const gaps = wikiGaps(root, dir);
   const gapsFile = writeGapReport(root, dir, gaps);
-  const writtenNow = result.entries.filter((entry) => entry.action === 'create' || entry.action === 'update').length;
+  const writtenNow = result.entries.filter(
+    (entry) => entry.action === 'create' || entry.action === 'update' || entry.action === 'merge' || entry.action === 'adopt'
+  ).length;
   const writeSummary = writtenNow > 0 ? `按当前仓库写入 ${writtenNow} 篇` : '本次没有写入任何文档';
   process.stdout.write(`  反推工作区：${writeSummary}；仍需人工确认：${gaps.length} 处（清单：${gapsFile}）\n`);
   for (const gap of gaps.slice(0, 8)) {
@@ -1561,23 +1622,170 @@ function cmdWiki(root, flags) {
   if (gaps.length > 8) process.stdout.write(`    … 其余 ${gaps.length - 8} 处见文件\n`);
 
   if (result.conflicts.length) {
-    // --keep 是「我确认保留」这个决定，不是失败；--ask 在非交互环境里才需要人来拍板。
-    if (mode === 'keep') {
-      process.stdout.write(`已按 --keep 保留 ${result.conflicts.length} 篇冲突文件（人工内容未改动）\n`);
-      return 0;
-    }
-    const adopt = byAction('conflict').filter((entry) => entry.adoptable).length;
-    const edited = result.conflicts.length - adopt;
-    const hint = adopt > 0
-      ? `${adopt} 篇是「没有受管区块」的既有文档：重跑 --update 会补区块并原样保留正文`
-      : '受管区块被人工改过';
-    const rest = edited > 0 ? '；另有 ' + edited + ' 篇区块被人工改过' : '';
     process.stderr.write(
-      `冲突未解决：${hint}${rest}。` +
-        '确认后重跑 --update，或保留人工内容跑 --keep 只补缺失文件。\n'
+      `有 ${result.conflicts.length} 篇受管区块标记不完整（只有开始或只有结束）：${result.conflicts.map((item) => item.name).join(', ')}。` +
+        '先手工补全标记，再重跑 wiki。\n'
     );
     return 1;
   }
+  return 0;
+}
+
+/**
+ * ux：用户体验与需求分析。
+ *
+ * - 默认：分析全部任务 + 项目需求，生成 prototype/ux.html（整体）+ 每个任务的 ux/index.html；
+ * - --user-words：新增需求并入 docs/ux/requirements.md，后续重跑不会丢；
+ * - --resolve：逐条关闭待确认项，写 prototype/.ux-resolved.json，重跑仍保持关闭；
+ * - --apply：把结论写回选中任务与它们的关联任务（受管区块，可重复执行）。
+ */
+function cmdUx(root, flags) {
+  let config;
+  try {
+    config = loadConfig(root).config;
+  } catch (error) {
+    return fail(error.message);
+  }
+
+  const tasks = (flags.args || []).filter((arg) => !String(arg).startsWith('-'));
+  const userWords = typeof flags.userWords === 'string' ? flags.userWords : '';
+  const resolveIds = [
+    ...new Set(
+      [].concat(flags.resolve || []).flatMap((value) =>
+        String(value)
+          .split(/[,，\s]+/)
+          .filter(Boolean)
+      )
+    ),
+  ];
+
+  let facts;
+  try {
+    // 整体报告永远覆盖全部任务；tasks 只决定 --apply 回写谁。
+    facts = collectUxFacts(root, config, {tasks, userWords});
+  } catch (error) {
+    // 未知任务 / 没有可分析内容属于业务前置条件，用 1 与 check 的语义对齐
+    return refuse(error.message);
+  }
+
+  let requirementsSaved = null;
+  if (!flags.dryRun) requirementsSaved = saveUxRequirements(root, config, facts);
+
+  if (resolveIds.length > 0) {
+    if (flags.dryRun) {
+      process.stdout.write(`（dry-run）将关闭待确认项：${resolveIds.join('、')}\n`);
+      return 0;
+    }
+    const resolved = resolveUxGaps(root, config, resolveIds, flags.by || '用户');
+    facts = collectUxFacts(root, config, {tasks});
+    const files = writeUxReports(root, config, facts);
+    refreshPlans(root, config);
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify({root, files, resolve: resolved, summary: facts.summary}, null, 2)}\n`);
+      return resolved.unknown.length > 0 ? 1 : 0;
+    }
+    process.stdout.write(`dsh-plugin-harness-cli ux --resolve → ${root}\n`);
+    for (const gap of resolved.resolved) {
+      process.stdout.write(`  CLOSED  ${gap.id} ${gap.task}：${gap.item}\n`);
+    }
+    for (const id of resolved.already) process.stdout.write(`  ALREADY ${id}（已经是关闭状态）\n`);
+    for (const id of resolved.unknown) process.stdout.write(`  UNKNOWN ${id}（当前没有这条待确认项）\n`);
+    process.stdout.write(
+      `  关闭 ${resolved.resolved.length} 项；记录：${resolved.path}；剩余 ${facts.summary.gaps} 项（阻断 ${facts.summary.blocking} 项）\n`
+    );
+    return resolved.unknown.length > 0 ? 1 : 0;
+  }
+
+  if (flags.apply) {
+    if (tasks.length === 0) return fail('--apply 需要任务名：ux --apply <任务名...>');
+    if (flags.dryRun) {
+      process.stdout.write(`（dry-run）将把 UX 复核区块写入 ${tasks.length} 个任务的 design.md（含直接关联任务）\n`);
+      return 0;
+    }
+    const result = applyUxContext(root, config, facts, tasks);
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify({root, apply: result}, null, 2)}\n`);
+      return result.updated.length + result.unchanged.length > 0 ? 0 : 1;
+    }
+    process.stdout.write(`dsh-plugin-harness-cli ux --apply → ${root}\n`);
+    for (const task of result.updated) {
+      process.stdout.write(`  SYNC    ${config.paths.specs || 'docs/specs'}/${task}/design.md（UX 复核区块）\n`);
+    }
+    for (const task of result.skipped) {
+      process.stdout.write(`  SKIP    ${task}（缺少 design.md，先跑 page ${task}）\n`);
+    }
+    if (result.related.length > 0) {
+      process.stdout.write(`  关联任务同步：${result.related.join('、')}\n`);
+    }
+    process.stdout.write(
+      `  已更新 ${result.updated.length} 个任务；未变化 ${result.unchanged.length} 个；跳过 ${result.skipped.length} 个\n`
+    );
+    return result.updated.length + result.unchanged.length > 0 ? 0 : 1;
+  }
+
+  if (flags.dryRun) {
+    const protoDir = (config.presets && config.presets.prototype && config.presets.prototype.dir) || 'prototype';
+    process.stdout.write(
+      `（dry-run）将写入 ${protoDir}/ux.html、${protoDir}/ux.json、${protoDir}/.ux-gaps.json` +
+        `，以及 ${facts.tasks.length} 个任务的 ${protoDir}/<任务>/ux/index.html\n`
+    );
+    if (facts.newRequirements.length > 0) {
+      process.stdout.write(`（dry-run）会把 ${facts.newRequirements.length} 条新需求并入 ${facts.requirementsPath}\n`);
+    }
+    return 0;
+  }
+
+  const files = writeUxReports(root, config, facts);
+  // 报告写完后刷新总览页：操作栏的「UX / 整体 UX」按钮依赖 hasUx 与 uxPage
+  if (!refreshPlans(root, config)) {
+    process.stderr.write('  plans.html 同步失败（UX 报告已写入）；重跑 dsh-plugin-harness-cli plans\n');
+  }
+
+  if (flags.json) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {root, files, summary: facts.summary, gaps: facts.gaps, blocking: facts.blockingGaps, resolved: facts.resolvedGaps},
+        null,
+        2
+      )}\n`
+    );
+    return 0;
+  }
+
+  process.stdout.write(`dsh-plugin-harness-cli ux → ${root}\n`);
+  process.stdout.write(`  整体报告：${files.global.html}（数据：${files.global.json}）\n`);
+  process.stdout.write(`  任务报告：${files.tasks.length} 份（${files.tasks.map((task) => task.name).join('、')}）\n`);
+  process.stdout.write(`  范围：${facts.scopeLabel}\n`);
+  if (requirementsSaved) process.stdout.write(`  项目需求已并入：${requirementsSaved}\n`);
+  process.stdout.write(
+    `  需求 ${facts.summary.requirements} 条；维度已分析 ${facts.summary.dimensionsDone}/${facts.summary.dimensionsTotal}；` +
+      `可用性检查：通过 ${facts.summary.pass} / 待补 ${facts.summary.todo}\n`
+  );
+  if (facts.summary.relations > 0) {
+    process.stdout.write(`  关联任务：${facts.summary.relations} 组（--apply 会一并刷新关联任务）\n`);
+  }
+  if (facts.summary.resolved > 0) {
+    process.stdout.write(`  已确认关闭：${facts.summary.resolved} 项（记录：${files.global.resolutions}）\n`);
+  }
+  if (facts.blockingGaps.length > 0) {
+    process.stdout.write(
+      `  UX 分析仍需补全：${facts.blockingGaps.length} 处阻断（共 ${facts.gaps.length} 处待确认；整体清单：${files.global.gaps}）\n`
+    );
+    for (const gap of facts.blockingGaps.slice(0, 5)) {
+      process.stdout.write(`    - [${gap.level}] ${gap.id} ${gap.task}：${gap.item}（${gap.hint}）\n`);
+    }
+    if (facts.blockingGaps.length > 5) {
+      process.stdout.write(`    … 其余 ${facts.blockingGaps.length - 5} 处见清单\n`);
+    }
+  } else {
+    process.stdout.write(
+      `  UX 分析：没有阻断性缺口（共 ${facts.gaps.length} 处建议补全；整体清单：${files.global.gaps}）\n`
+    );
+  }
+  process.stdout.write(
+    `  下一步：补完一条重跑 ux 会自动移除；已确认的用 ux --resolve <编号>，` +
+      `更新任务用 ux --apply <任务名>（含关联任务）\n`
+  );
   return 0;
 }
 
@@ -1722,6 +1930,10 @@ async function main(argv) {
   const {command, args, flags, unknown} = parseArgs(argv);
   const root = resolveRoot(flags);
 
+  if (command === 'help' && args.length > 0 && isProcessTopic(args[0])) {
+    process.stdout.write(`${PROCESS_TEXT}\n`);
+    return 0;
+  }
   if (flags.help || command === 'help' || command === undefined) {
     process.stdout.write(`${USAGE}\n`);
     return command === undefined && argv.length > 0 ? 2 : 0;
@@ -1731,9 +1943,9 @@ async function main(argv) {
     return 0;
   }
   if (unknown.length) return fail(unknown.join('；'));
-  if (!['init', 'agents', 'page', 'plan', 'review', 'progress', 'ui', 'sql', 'delete', 'check', 'doctor', 'wiki', 'plans'].includes(command)) {
+  if (!['init', 'agents', 'page', 'plan', 'review', 'progress', 'ui', 'sql', 'delete', 'check', 'doctor', 'wiki', 'plans', 'ux'].includes(command)) {
     return fail(
-      `未知命令：${command}（可用：init / agents / page / plan / review / progress / ui / sql / delete / check / doctor / wiki / plans / style / version）`
+      `未知命令：${command}（可用：init / agents / page / plan / review / progress / ui / sql / delete / check / doctor / wiki / plans / ux / style / version）`
     );
   }
 
@@ -1749,6 +1961,7 @@ async function main(argv) {
     if (command === 'delete') return cmdDelete(root, {...flags, args});
     if (command === 'check') return cmdCheck(root, flags);
     if (command === 'wiki') return cmdWiki(root, flags);
+    if (command === 'ux') return cmdUx(root, {...flags, args});
     if (command === 'plans') return cmdPlans(root, {...flags, args});
     return cmdDoctor(root, flags);
   } catch (err) {

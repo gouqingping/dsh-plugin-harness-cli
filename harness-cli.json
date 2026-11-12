@@ -7,7 +7,7 @@
       "JavaScript"
     ],
     "runtime": "Node.js >= 18（零运行时依赖）",
-    "version": "0.1.5"
+    "version": "0.1.6-rc"
   },
   "paths": {
     "agents": "AGENTS.md",
@@ -120,6 +120,10 @@
     {
       "title": "Codex 插件设计（双适配层、单业务核心、本地 MCP）",
       "path": "docs/adr/ADR-0002-codex-plugin.md"
+    },
+    {
+      "title": "UX 分析（全项目报告 + 缺口生命周期 + 关联同步）",
+      "path": "docs/adr/ADR-0003-ux-analysis.md"
     },
     {
       "title": "模板目录（生成物文案的唯一真源）",

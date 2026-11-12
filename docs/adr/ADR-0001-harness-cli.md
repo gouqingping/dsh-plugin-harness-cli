@@ -164,6 +164,7 @@
 - **选择即时反馈**：`userQuestions` 的每次点选或文本输入，在 `askChoice` 返回前立即追加为当前会话的
   `user/message`（`surfaceOp: append`），正文用「已选择：…」或「已输入：…」；它只显示在对话里，
   不唤醒新的模型回合。命令菜单、任务名、UI、确认、删除、wiki 冲突与端口等全部选择共用这条路径。
+  前提是会话已有 `system` head；首轮开始前没有 head 时跳过（见 §19）。
 - **page / plan 两阶段执行**：先完成任务名与「是否生成 UI 设计稿」的选择，再执行主命令；选择 UI 时
   依次执行主命令与 `ui`。主命令失败则不继续生成 UI。
 - **plan 开工延后**：如果 `plan` 同时选择生成 UI，方案命令完成后先执行 `ui`；只有 UI 成功生成后
@@ -179,3 +180,72 @@
   直接送入当前执行流，不再经由 `agent.followup()` 排到下一轮；只有缺少 `steer()` 的旧宿主才回退到队列。
 - **判定**：`plugin/tests/client.test.js` 覆盖键盘索引循环与首尾跳转；`cordis.test.js` 对三条自动消息
   同时记录 `steer` / `followup`，要求前者调用一次、后者零次。
+
+## 19. 补充决策（2026-11-12）：首轮前不写选择反馈，保住 v4 日志可冷读
+
+- **问题**：新会话在首轮开始前调用 `/harness-cli`，`appendChoiceFeedback` 直接追加 `user/message`，
+  surface 的第一个节点变成用户消息；DSH v4 要求首个节点是受保护的 `system/message`，冷读会报
+  `system/message requires a protected first surface head`，整个会话历史打不开。2026-11-11 的
+  4 个会话就是这条路径写坏的，已按「把 head 之前的 surface 消息移到 head 之后」修复并复原。
+- **决策**：`appendChoiceFeedback` 先看 `session.surface.nodes`：为空或首节点不是 `system/message`
+  时跳过，不写日志；没有 surface API 的旧宿主沿用旧行为。命令结果仍由当前 handler 返回，模型上下文
+  不丢，只是少一条独立的「已选择：…」消息。
+- **判定**：`plugin/tests/cordis.test.js` 的「首轮前没有 system head 时跳过选择反馈」同时覆盖空
+  surface 与首节点为 `user/message` 两种情形，并断言删除命令本身仍然成功。
+
+## 20. 补充决策（2026-11-12，已由 §23 撤销）：UI 设计先选方向，再生成 index.html
+
+- **问题**：`ui` 一跑就直接写 `ui/index.html`，等于在「用哪个设计方向」还没定的时候就先画完了；
+  人看到的是一份默认管理后台，想换方向只能整页重写，选择没有落到文件里。
+- **决策**：引入设计方向目录（`plugin/src/ui-designs.js`）：`admin` 标准管理后台、`dashboard` 数据看板、
+  `workbench` 流程工作台。三个方向共用 antd v5 令牌与组件，只改信息架构重点（表格 + 表单 / 趋势图 + 明细 /
+  步骤 + 待办 + 时间线），设计稿的 `<html data-design="…">` 记录选中的方向。
+- **门禁**：`ui` 必须带 `--design <id>`（或沿用已有 `index.html` 的 `data-design`）才写 `index.html`；
+  没选方向时只写一份「方向待选」的 `ui/README.md` 并退出 1，绝不生成设计稿。`ui --list-designs` 列方向；
+  未知方向按用法错误退出 2。
+- **旧稿迁移**：已存在但没有 `data-design` 的旧设计稿不猜方向，也不在旁边再写待选说明；要求显式
+  `--design` 后才重写（`--force` 可整页覆盖）。
+- **交互**：`/harness-cli` 的 page / plan 在「生成 UI 设计稿」之后紧接着问「用哪个设计方向」，选定后才
+  执行 `ui`；`/harness-cli ui` 同样先弹出方向选择。取消选择则只留待选说明，`plan` 不自动开工。
+  工具 `harness_cli_ui` 增加 `design` 枚举参数，模型必须先问用户再调用。
+- **判定**：`plugin/tests/e2e.test.js` 覆盖「没选方向 → 退出 1 且没有 index.html」「方向写入 data-design
+  且重跑沿用」「未知方向退出 2」；`plugin/tests/cordis.test.js` 在设计方向回调发生时断言 index.html 还不存在，
+  并在选完后断言文件已生成。
+
+## 21. 补充决策（2026-11-12）：任务页增加步骤流程条
+
+- **问题**：任务页只有逐步骤卡片和总进度，看不到「整条流程走到哪一步」；当前步骤要靠人从上往下扫卡片判断。
+- **决策**：在 `progress.html` 的总进度下面加「步骤流程」：按「4. 任务规划」的顺序画横向流程（1 → 2 → …），
+  每个节点显示标题、百分比与状态（100% 已完成 / >0 进行中 / 0 未开始）；第一个未完成步骤高亮并标「当前」。
+  上方两行汇总「第 N / M 步 · 已完成 X 步」与「当前步骤：…」；点节点可平滑定位到对应步骤卡片。
+- **单一数据源**：流程由页面脚本从 `li.step` / `.step-pct[data-pct]` 读取后生成，不另存一份步骤数据；
+  步骤顺序或百分比一改，流程与汇总自动重算。
+- **老页面升级**：旧任务页没有该区块时，下一次 `progress` 写入会从当前模板取「步骤流程」区块与脚本补上
+  （保留原有内容与百分比），不需要重跑 `page --force`。
+- **判定**：`plugin/tests/e2e.test.js` 断言新任务页带 `data-flow` / `data-progress-flow` 与当前高亮逻辑；
+  另一个用例把旧页面的区块与脚本删掉后跑 `progress`，断言被补齐且新百分比仍在。
+
+## 22. 补充决策（2026-11-12）：help 先选指令，再给说明
+
+- **问题**：`/harness-cli help` 一次性打印全部命令、工具与流程，想查某条指令的用法要自己翻。
+- **决策**：`help` 不带主题时先弹一个**非必选**的选择框，选项是**指令后缀**（`delete` / `page` / `plan` /
+  `progress` …，含菜单里收起的 `progress`）与「完整帮助」；选中 `delete` 等价于执行
+  `/harness-cli help delete`，只显示该指令的用法、说明与对应工具，跳过 / 取消 / 没有选择框时回退到完整帮助。
+  选择链（`已选择：帮助 → delete`）并进结果卡片顶部，不再单独追加「已选择」消息——DSH 把命令结果固定在
+  command/run 位置，单独的选择消息必然排在卡片之后，并进卡片才能保持「选择在前、说明在后」的阅读顺序。
+  `help <子指令>`、`help process` 仍直接出结果，不再二次弹窗。
+- **单一真源**：子指令的用法与说明集中在 `SUBCOMMAND_HELP`，选择框与 `help <子指令>` 共用同一份文案。
+- **判定**：`plugin/tests/cordis.test.js` 覆盖「选择框包含所有指令与完整帮助」「选 check 只看 check 说明」
+  「取消后回退完整帮助」三个分支。
+
+
+## 23. 补充决策（2026-11-12）：撤销 UI 设计方向选择，恢复单一 antd 模板
+
+- **背景**：§20 引入的三个方向（`admin` / `dashboard` / `workbench`）在实际使用中多了一步交互，
+  用户确认不需要，要求回到之前的方案。
+- **决策**：撤销 §20：删除 `plugin/src/ui-designs.js` 与「方向待选」说明；`ui` 不再要求 `--design`，
+  直接生成单一 antd v5 模板（布局 + 指标卡 + 表格 + 表单 + 状态）；page / plan 的 UI 询问恢复为
+  「要不要生成 UI 设计稿」；P20 的 `data-design` 警告一并移除。
+- **保留**：任务页「步骤流程」（§21）与 `help` 指令选择框（§22）不受影响。
+- **判定**：删除 `--design` / `--list-designs` / `data-design` 相关用例；`ui` 不带参数仍生成
+  `prototype/<任务>/ui/index.html`，`--force` 覆盖语义不变。
